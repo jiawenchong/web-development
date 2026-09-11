@@ -103,6 +103,69 @@ HTTP 狀態碼與回應內容（截斷到 2000 字）。
 把那個請求的截圖或「Copy as cURL」貼給我，我可以直接照著改
 `officialdoc_pipeline.py`，不用再猜。
 
+## 實測結果（2026-09-11，用 K3B 這份公文測完 10 種方法）
+
+10 種方法 HTTP 都回 200，但**沒有一種真的讀到圖片內容**：
+
+* **方法 9、10（multipart）** → 直接 `{"isSuccess": false, "Result": "Service internal error."}`。
+  這是後端真的嘗試處理後出錯，不是靜默忽略——證實 `/api/flow_chat/`
+  **完全不接受 multipart/form-data**，只吃 JSON。
+* **方法 3、5**（明確帶 `data:image/...` 或圖片陣列）→ 誠實回覆
+  「本件為圖片格式公文，無法擷取全文」「系統無法自動提取全文」。
+  沒讀到，但至少沒有亂編，算是「乾淨的失敗」。
+* **方法 4、6、7、8** → 回來的字號/主旨，都只是你自己寫在 `input` 裡
+  「看得懂的文字部分」被抓出來重複，那一大串 base64 完全沒被用到。
+* **方法 1**（整份 PDF 的 base64，旁邊沒有任何可讀文字線索）→ **最危險的
+  結果**：編出一份完全不存在的假公文（「來文字號 RSPL-1.0」「主旨：半導體
+  製程設備維護與升級計畫」），跟真正的台電 K3B 公文毫無關係，還配了假的
+  指派人員與知會人員。這比「查不到」嚴重得多——是自信地生成一份看起來
+  完全合理、實際上是幻覺出來的審核結果，混進正式流程不會有人發現。
+
+**結論：`flow_chat` 背後是純文字 LLM，沒有視覺/OCR 能力，也不接受檔案
+上傳。不是格式沒猜對，是這條路線本身走不通。**
+
+## 找到真正的上傳端點：`/mindMate/upload_file/`
+
+從瀏覽器 DevTools 抓到 Pensieve 網頁版手動上傳時打的真實請求：
+
+```
+POST https://pensieve.kh.asegroup.com/mindMate/upload_file/
+Content-Type: multipart/form-data
+Cookie: PensieveLog=...; sessionid=...
+Referer: https://pensieve.kh.asegroup.com/flow/5d5d65ad19374419b281ecab12114ca9
+```
+
+跟 `flow_chat` 的關鍵差異：
+
+* **命名空間不同**：`mindMate`（網頁後台）vs `api`（flow_chat 的 REST API）。
+* **驗證方式不同**：這裡用瀏覽器登入後的 **session cookie**
+  （`sessionid` / `PensieveLog`），不是 flow_chat 用的 `token` + `empno`。
+* **綁定 flow**：Referer 帶的 flow_id 跟 flow_chat token 裡的 flow_id
+  完全一致，代表上傳綁在你正在開的那個 flow 頁面底下。
+* 欄位名稱是 `file`（跟我們猜的方法 9 一樣，只是端點打錯了）。
+
+新增了 `probe_mindmate_upload.py`，可以直接用抓到的 session cookie
+測試真的上傳一份 PDF 上去，把伺服器回應的內容印出來。
+
+**還缺的兩塊拼圖**（需要再回瀏覽器 DevTools 抓一次）：
+
+1. `upload_file` 這個請求的 **Response**（上傳完伺服器回了什麼——
+   多半是一個 file id 或 url）。
+2. 上傳完、送出對話之後，**緊接著送出去的下一個請求**——這個請求的
+   body 裡怎麼引用剛剛上傳的檔案，這是唯一能確定「flow_chat 端 API
+   要怎麼帶檔案代號進去」的方法。
+
+另外需要確認：這個 `mindMate/upload_file/` 用的是 session cookie
+驗證，flow_chat 用的是 token + empno；上傳完的檔案，token 那邊呼叫
+flow_chat 時到底認不認得到——這點還沒驗證，如果認不到，代表檔案上傳
+本質上只能透過「已登入的瀏覽器 session」完成，你現有的 token-based
+自動化腳本可能連不上這條路，需要跟平台管理者確認是否有對應的
+API-key 版本上傳端點。
+
+⚠️ `sessionid` / `PensieveLog` 這組 cookie 等同你的登入身分，**不要
+寫進程式碼、不要 commit 進 git**，用 `probe_mindmate_upload.py` 時一律
+用命令列參數或環境變數帶入，測完就丟。
+
 ## 目前已知：K3B 這份公文在既有 pipeline 裡會怎樣
 
 `officialdoc_pipeline.py` 目前用 `pdfplumber` 的 `extract_text()` 抽文字。

@@ -3,21 +3,29 @@
 公文 comment 回饋 → LLM 的知識整理
 
 feedback_server.py 把使用者在 officialdoc.html 上的評分寫進 feedback.jsonl，
-這支負責把那些回饋「整理成 LLM 吃得下的形狀」，有兩條路：
+這支負責把那些回饋「整理成 LLM 吃得下的形狀」，有三條路：
 
-  1) 自動：officialdoc_pipeline.py 每次呼叫 Pensieve 前，用 select_examples()
+  1) prompt：officialdoc_pipeline.py 每次呼叫 Pensieve 前，用 select_examples()
      挑出「主旨最像」的幾筆回饋，塞進 input 的「參考回饋」欄位一起送出。
-     不用動 flow、不用上傳檔案，下一次跑就生效。
+     一定送得到 LLM 手上，是主要的那一層。
 
-  2) 人工：write_digest() 把所有回饋彙整成 feedback_digest.md。
+  2) 知識庫（RAG）：write_cases() 把每篇公文最新的回饋寫成一則一則的「案例卡」，
+     upload_cases() 再用 /api/uploadVector/ 上傳覆蓋到 Pensieve 知識庫。
+     內容沒變就不重傳。這是第二層保險。
+
+  3) 人工：write_digest() 產生 feedback_digest.md。
      同一種錯一直出現時，代表 comment.txt 的規則本身要改——
      照著彙整檔改 prompt，再把 pipeline 的 PROMPT_VERSION +1。
 
 指令：
     python feedback_knowledge.py digest              # 產生 feedback_digest.md
     python feedback_knowledge.py preview "主旨文字"   # 看某個主旨會帶哪幾筆回饋
+    python feedback_knowledge.py cases               # 只產生案例卡檔案，不上傳
+    python feedback_knowledge.py upload              # 產生案例卡並上傳知識庫（內容沒變就跳過）
+    python feedback_knowledge.py upload --force      # 不管有沒有變都重傳
 """
 
+import hashlib
 import json
 import os
 import re
@@ -30,7 +38,9 @@ from datetime import datetime
 # 設定區
 # ═══════════════════════════════════════════════════════════
 
-KNOWLEDGE_DIR = r"D:\ASEKH\K20076\2026\公文簽核agent\knowledge"
+# 回饋資料放在「這支程式所在資料夾」底下的 knowledge\。
+# 程式搬到哪台電腦，資料就跟著在那台；要指定別的位置就直接改這行。
+KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge")
 FEEDBACK_FILE = os.path.join(KNOWLEDGE_DIR, "feedback.jsonl")
 DIGEST_FILE = os.path.join(KNOWLEDGE_DIR, "feedback_digest.md")
 
@@ -46,6 +56,29 @@ INCLUDE_FIVE_STAR = True
 
 # 來文字號是這些值時視為沒有字號，改用主旨當作識別
 _EMPTY_DOC_NO = {"", "nan", "none", "—", "-", "無"}
+
+# ── Pensieve 知識庫（RAG）──────────────────────────
+VECTOR_UPLOAD_URL = "https://pensieve.kh.asegroup.com/api/uploadVector/"
+
+# ★ 知識庫的 vector_id ★
+#   三個來源，由上到下找第一個有值的：這個變數 → 環境變數 PENSIEVE_VECTOR_ID → 下面那個檔案
+#   這個 id 等於知識庫的寫入權限，不要 commit 進 git。
+VECTOR_ID = ""
+VECTOR_ID_FILE = os.path.join(KNOWLEDGE_DIR, "vector_id.txt")
+
+# 上傳的檔名固定不變。Pensieve 用檔名辨識文件，每次上傳同一個檔名＝覆蓋舊的那份，
+# 知識庫裡就永遠只有「最新一版」的案例，不會累積過時或互相矛盾的內容。
+CASES_FILE = os.path.join(KNOWLEDGE_DIR, "officialdoc_feedback_cases.txt")
+
+# 覆蓋 / 附加如果需要額外參數（例如 {"mode": "replace"}），填在這裡會一起送出
+VECTOR_UPLOAD_EXTRA_DATA = {}
+
+VECTOR_UPLOAD_TIMEOUT = 180
+UPLOAD_STATE_FILE = os.path.join(KNOWLEDGE_DIR, ".vector_upload_state.json")
+
+# 跟 officialdoc_pipeline.py 一樣：內部自簽憑證、內網不走 proxy
+VERIFY_SSL = False
+PROXIES = {"http": None, "https": None}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -64,6 +97,17 @@ def doc_key(item):
     if doc_no.lower() not in _EMPTY_DOC_NO:
         return doc_no
     return str(item.get("主旨") or "").strip()
+
+
+def atomic_write_text(path, content):
+    """先寫暫存檔再 os.replace，避免半截檔。"""
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    tmp = os.path.join(folder, f".{os.path.basename(path)}.{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp, path)
+    return path
 
 
 def load_feedback(path=None):
@@ -119,6 +163,10 @@ def similarity(a, b):
     return 2 * len(x & y) / (len(x) + len(y))
 
 
+# ═══════════════════════════════════════════════════════════
+# 1) prompt：參考回饋
+# ═══════════════════════════════════════════════════════════
+
 def to_example(fb):
     """把一筆回饋轉成送給 LLM 的形狀，空欄位不帶。"""
     example = {
@@ -159,12 +207,178 @@ def select_examples(record, latest, max_examples=MAX_EXAMPLES,
 
 
 # ═══════════════════════════════════════════════════════════
-# 彙整檔（給人看，用來改 prompt）
+# 2) 知識庫：案例卡
+# ═══════════════════════════════════════════════════════════
+
+def _line(text):
+    """單行化，避免換行把案例卡切散。"""
+    return re.sub(r"\s*\n\s*", " / ", str(text or "").replace("\r", "")).strip()
+
+
+def case_card(fb):
+    """一篇公文的回饋 → 一則獨立、自己就看得懂的案例。
+
+    RAG 會把檔案切成小段、只撈「跟這次公文最像」的幾段給 LLM，
+    所以每則案例都要自己帶齊主旨、摘要、錯在哪、正解，不能依賴前後文。
+    主旨與摘要放最前面，讓檢索時容易被相似公文命中。
+    """
+    score = fb["score"]
+    lines = [
+        f"【公文回饋案例】{_line(fb.get('來文字號')) or '無字號'}",
+        f"主旨：{_line(fb.get('主旨'))}",
+    ]
+    if fb.get("summary"):
+        lines.append(f"摘要：{_line(fb.get('summary'))}")
+
+    if score >= 5:
+        lines += [
+            "使用者評分：5/5（正確示範）",
+            f"指派人員：{_line(fb.get('指派人員'))}",
+            f"知會人員：{_line(fb.get('知會人員'))}",
+            f"comment：{_line(fb.get('comment'))}",
+            "處理原則：主旨與內容相似的公文，指派人員、知會人員與 comment 比照辦理。",
+        ]
+    else:
+        lines += [
+            f"使用者評分：{score}/5（錯誤案例，請勿照抄當時的結果）",
+            f"當時的指派人員：{_line(fb.get('指派人員'))}",
+            f"當時的知會人員：{_line(fb.get('知會人員'))}",
+            f"當時的comment：{_line(fb.get('comment'))}",
+            f"錯誤原因：{_line(fb.get('reason'))}",
+        ]
+        if fb.get("suggested_comment"):
+            lines.append(f"使用者要的comment：{_line(fb.get('suggested_comment'))}")
+        lines.append("處理原則：主旨與內容相似的公文，依「錯誤原因」修正指派人員、知會人員與 comment。")
+
+    return "\n".join(lines)
+
+
+def build_cases(records):
+    """整份知識庫文件。每篇公文只留最新評分，新的在前。"""
+    latest = latest_by_doc(records)
+    cards = [case_card(fb) for fb in reversed(latest.values())]
+    header = (
+        "公文指派與 comment 的使用者回饋案例集。\n"
+        "每則【公文回饋案例】是使用者對某篇公文的指派結果與 comment 的評分："
+        "5/5 是正確示範；低於 5 分是錯誤案例，以「錯誤原因」與「使用者要的comment」為準。"
+    )
+    return header + "\n\n" + "\n\n".join(cards) + "\n"
+
+
+def write_cases(feedback_file=None, cases_file=None):
+    """產生案例卡檔案。沒有任何回饋時回傳 None。"""
+    records = load_feedback(feedback_file)
+    if not latest_by_doc(records):
+        return None
+    return atomic_write_text(cases_file or CASES_FILE, build_cases(records))
+
+
+def get_vector_id():
+    if VECTOR_ID.strip():
+        return VECTOR_ID.strip()
+    env = os.environ.get("PENSIEVE_VECTOR_ID", "").strip()
+    if env:
+        return env
+    if os.path.exists(VECTOR_ID_FILE):
+        with open(VECTOR_ID_FILE, "r", encoding="utf-8") as f:
+            value = f.read().strip()
+        if value:
+            return value
+    return ""
+
+
+def _load_state():
+    try:
+        with open(UPLOAD_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _parse_upload_response(resp, filename):
+    """回傳 (成功與否, 說明)。"""
+    try:
+        data = resp.json()
+    except ValueError:
+        return False, f"HTTP {resp.status_code}，回應不是 JSON：{resp.text[:300]}"
+
+    if not isinstance(data, dict):
+        return False, f"看不懂的回應：{str(data)[:300]}"
+
+    lower = {str(k).lower(): v for k, v in data.items()}
+    if not lower.get("issuccess"):
+        return False, f"isSuccess=False：{lower.get('result') or data}"
+
+    success = [str(x) for x in (lower.get("successfile") or [])]
+    fail = [str(x) for x in (lower.get("failfile") or [])]
+    if any(filename in x for x in fail):
+        return False, f"Embedding 失敗（FailFile）：{fail}"
+    if success and not any(filename in x for x in success):
+        return False, f"SuccessFile 裡沒有 {filename}：{success}"
+    return True, f"SuccessFile={success}"
+
+
+def upload_cases(force=False, dry_run=False, log=print):
+    """產生案例卡並上傳 Pensieve 知識庫。
+
+    回傳 "uploaded" / "unchanged" / "skipped"；上傳失敗丟 RuntimeError。
+    內容跟上次成功上傳的一模一樣就不重傳，避免每次排程都重新 embedding。
+    """
+    path = write_cases()
+    if path is None:
+        log("知識庫：還沒有任何回饋，不上傳")
+        return "skipped"
+
+    vector_id = get_vector_id()
+    if not vector_id:
+        log(f"知識庫：沒有設定 vector_id（VECTOR_ID / 環境變數 PENSIEVE_VECTOR_ID / {VECTOR_ID_FILE}），不上傳")
+        return "skipped"
+
+    with open(path, "rb") as f:
+        content = f.read()
+    digest = hashlib.sha256(content + vector_id.encode("utf-8")).hexdigest()
+
+    state = _load_state()
+    if not force and state.get("sha256") == digest:
+        log("知識庫：案例內容沒變，不重傳")
+        return "unchanged"
+
+    filename = os.path.basename(path)
+    if dry_run:
+        log(f"知識庫（dry-run）：會上傳 {filename}（{len(content)} bytes）到 {VECTOR_UPLOAD_URL}")
+        return "skipped"
+
+    import requests            # 只有上傳時才需要；feedback_server.py 不用裝 requests
+    if VERIFY_SSL is False:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    data = {"vector_id": vector_id, **VECTOR_UPLOAD_EXTRA_DATA}
+    files = {"file": (filename, content, "text/plain; charset=utf-8")}
+    try:
+        resp = requests.post(VECTOR_UPLOAD_URL, data=data, files=files,
+                             timeout=VECTOR_UPLOAD_TIMEOUT, verify=VERIFY_SSL, proxies=PROXIES)
+    except requests.RequestException as e:
+        raise RuntimeError(f"知識庫上傳連線失敗：{type(e).__name__}: {e}") from e
+
+    ok, detail = _parse_upload_response(resp, filename)
+    if not ok:
+        raise RuntimeError(f"知識庫上傳失敗：{detail}")
+
+    atomic_write_text(UPLOAD_STATE_FILE, json.dumps(
+        {"sha256": digest, "file": filename, "uploaded_at": f"{datetime.now():%Y-%m-%d %H:%M:%S}"},
+        ensure_ascii=False, indent=2))
+    log(f"知識庫：已上傳 {filename}，{detail}")
+    return "uploaded"
+
+
+# ═══════════════════════════════════════════════════════════
+# 3) 彙整檔（給人看，用來改 prompt）
 # ═══════════════════════════════════════════════════════════
 
 def _md(text):
     """單行化，避免 comment 裡的換行把 markdown 版面弄亂。"""
-    return str(text or "").replace("\r", "").replace("\n", " / ").strip() or "（無）"
+    return _line(text) or "（無）"
 
 
 def build_digest(records):
@@ -224,16 +438,8 @@ def build_digest(records):
 
 
 def write_digest(feedback_file=None, digest_file=None):
-    """產生彙整檔，回傳寫入的路徑。先寫暫存檔再 os.replace，避免半截檔。"""
-    digest_file = digest_file or DIGEST_FILE
-    content = build_digest(load_feedback(feedback_file))
-    folder = os.path.dirname(digest_file)
-    os.makedirs(folder, exist_ok=True)
-    tmp = os.path.join(folder, f".{os.path.basename(digest_file)}.{os.getpid()}.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(content)
-    os.replace(tmp, digest_file)
-    return digest_file
+    """產生彙整檔，回傳寫入的路徑。"""
+    return atomic_write_text(digest_file or DIGEST_FILE, build_digest(load_feedback(feedback_file)))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -252,11 +458,29 @@ def main(argv=None):
     p_preview.add_argument("subject", help="公文主旨")
     p_preview.add_argument("--doc-no", default="", help="來文字號（選填）")
 
+    sub.add_parser("cases", help="只產生知識庫案例卡檔案，不上傳")
+
+    p_upload = sub.add_parser("upload", help="產生案例卡並上傳 Pensieve 知識庫")
+    p_upload.add_argument("--force", action="store_true", help="內容沒變也重傳")
+    p_upload.add_argument("--dry-run", action="store_true", help="不真的上傳")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "digest":
-        path = write_digest(args.file, args.out)
-        print(f"已寫入 {path}")
+        print(f"已寫入 {write_digest(args.file, args.out)}")
+        return 0
+
+    if args.cmd == "cases":
+        path = write_cases(args.file)
+        print(f"已寫入 {path}" if path else "還沒有任何回饋")
+        return 0
+
+    if args.cmd == "upload":
+        try:
+            upload_cases(force=args.force, dry_run=args.dry_run)
+        except RuntimeError as e:
+            print(e, file=sys.stderr)
+            return 1
         return 0
 
     latest = latest_by_doc(load_feedback(args.file))

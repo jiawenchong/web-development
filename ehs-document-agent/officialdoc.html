@@ -474,10 +474,10 @@
 
 <script>
     // ===== 回饋服務設定 =====
-    // feedback_server.py 跑在哪台電腦，就填那台的 IP（在那台電腦開 cmd 打 ipconfig 看 IPv4 位址）。
-    // 測試時可在網址後面加 ?fbapi=http://127.0.0.1:8765 臨時覆蓋。
+    // feedback_server.py 跟這個網頁跑在同一台主機（10.10.51.67），所以直接用網頁的主機名稱 + 8765 port。
+    // 服務若改放別台，把這裡換成那台的位址；測試時可在網址後面加 ?fbapi=http://127.0.0.1:8765 臨時覆蓋。
     const FEEDBACK_API = (new URLSearchParams(location.search).get('fbapi')
-                          || 'http://YOUR-PC-IP:8765').replace(/\/+$/, '');
+                          || `http://${location.hostname || '127.0.0.1'}:8765`).replace(/\/+$/, '');
     const FEEDBACK_TIMEOUT_MS = 5000;
     const QUEUE_KEY = 'officialdoc_feedback_queue';     // 送不出去的回饋先暫存在瀏覽器
 

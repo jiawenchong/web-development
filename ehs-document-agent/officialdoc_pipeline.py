@@ -140,6 +140,10 @@ PROMPT_VERSION = 1
 USE_FEEDBACK = True
 FEEDBACK_FIELD = "參考回饋"
 
+# 每次跑完把回饋整理成案例卡，覆蓋上傳到 Pensieve 知識庫（vector_id 設定在 feedback_knowledge.py）。
+# 內容沒變就不重傳；上傳失敗只記警告，不影響公文審核結果。
+USE_VECTOR_UPLOAD = True
+
 # ── STEP 4：最終輸出 ───────────────────────────────
 OUTPUT_JSON = r"\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc.json"
 
@@ -898,12 +902,17 @@ def main():
         step4_publish(results)
         step5_send_mail(results)
 
-        # 順手更新回饋彙整檔；失敗不影響主流程
+        # 順手更新回饋彙整檔、同步知識庫；失敗不影響主流程
         if USE_FEEDBACK:
             try:
                 log.info("回饋彙整已更新：%s", fk.write_digest())
             except OSError as e:
                 log.warning("回饋彙整產生失敗：%s", e)
+        if USE_FEEDBACK and USE_VECTOR_UPLOAD:
+            try:
+                fk.upload_cases(log=log.info)
+            except (RuntimeError, OSError) as e:
+                log.warning("%s（下次執行會再試）", e)
 
         log.info("全部完成，耗時 %s", datetime.now() - started)
         return 0

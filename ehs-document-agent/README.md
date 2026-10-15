@@ -184,48 +184,69 @@ API-key 版本上傳端點。
 
 ## Comment 回饋機制（讓 LLM 從使用者評分學習）
 
+整套（pipeline 排程 + 回饋服務）都跑在網頁所在的 **10.10.51.67** 上。
+
 ### 資料怎麼流
 
 ```
 officialdoc.html（每張卡片 comment 下方：1~5 星，低於 5 分必填原因，可選填「建議的 comment」）
-      │ POST http://<你電腦的IP>:8765/feedback
+      │ POST http://10.10.51.67:8765/feedback   （網頁自動用自己的主機名稱，不用填 IP）
       ▼
-feedback_server.py（跑在你電腦上）──寫入──> D:\ASEKH\K20076\2026\公文簽核agent\knowledge\feedback.jsonl
+feedback_server.py ──寫入──> <程式資料夾>\knowledge\feedback.jsonl
       │
       ▼ 下次跑 officialdoc_pipeline.py 時
-  ① 每篇公文挑出主旨最像的 ≤3 筆回饋，放在 input 的「參考回饋」欄位一起送給 flow
+  ① prompt：每篇公文挑主旨最像的 ≤3 筆回饋，放在 input 的「參考回饋」欄位送給 flow
   ② 快取裡被打低分的那篇，帶著修正意見自動重新產生一次
-  ③ 產生 knowledge\feedback_digest.md 彙整檔，給人看、用來改 prompt 規則
+  ③ 知識庫：把所有回饋寫成案例卡 officialdoc_feedback_cases.txt，
+     用 /api/uploadVector/ 覆蓋上傳（同檔名＝覆蓋；內容沒變就不重傳）
+  ④ 產生 knowledge\feedback_digest.md 彙整檔，給人看、用來改 prompt 規則
 ```
+
+只存分數、原因、建議 comment 與當時的公文內容，不記評分人、時間、來源 IP。
 
 | 檔案 | 用途 |
 |---|---|
 | `feedback_server.py` | 收回饋的小服務（只用標準函式庫）。`POST /feedback`、`GET /feedback/latest`、`GET /health` |
-| `feedback_knowledge.py` | 讀回饋、挑相似回饋、產生彙整檔。`python feedback_knowledge.py digest` / `preview "主旨"` |
-| `start_feedback_server.bat` | 啟動服務，可放進工作排程器（登入時執行） |
+| `feedback_knowledge.py` | 挑相似回饋、產生案例卡並上傳知識庫、產生彙整檔。`digest` / `preview "主旨"` / `cases` / `upload [--force]` |
+| `start_feedback_server.bat` | 啟動回饋服務，放進工作排程器（開機時執行） |
 
-### 第一次要做的設定
+### 搬到 10.10.51.67 的檢查清單
 
-1. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 放到跟
-   `officialdoc_pipeline.py` 同一個資料夾，執行 `start_feedback_server.bat`。
-   瀏覽器打開 `http://127.0.0.1:8765/health` 看到 `"ok": true` 就是好了。
-2. 開防火牆讓別台電腦連得進來（系統管理員 cmd，執行一次）：
+1. 裝 Python 與套件：`pip install pandas pdfplumber requests xlrd lxml`（xlrd/lxml 是讀 .xls 報表用）。
+2. 下載腳本 `download_report.py` 用 Selenium，那台要有 Chrome 與對應版本的 driver。
+3. **`PDF_FOLDERS` 改成 UNC 路徑**（`\\伺服器\分享\...`）。那台沒有你電腦上的 `U:`，
+   而且「排程執行的帳號」要有讀取權限。
+4. `WORK_DIR` 改成那台上的資料夾；`OUTPUT_JSON` 可以改成本機路徑
+   （例如 `D:\FAC_Web\agent_platform\html_files\data\officialdoc.json`），不用再繞 `\\10.10.51.67\d$`。
+5. 先在那台手動跑 `python officialdoc_pipeline.py --dry-run`，確認抓得到報表和 PDF；
+   再跑 `--probe` 確認連得到 Pensieve。都通了再設排程。
+
+### 回饋服務
+
+1. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 放在 pipeline 同一個資料夾，
+   執行 `start_feedback_server.bat`，打開 `http://127.0.0.1:8765/health` 看到 `"ok": true` 就是好了。
+   放進工作排程器（觸發：開機時；勾「不論使用者是否登入都執行」），才不會重開機就停掉。
+2. **開 8765 port 的防火牆**（系統管理員 cmd，執行一次，或請 IT 開）：
    `netsh advfirewall firewall add rule name="officialdoc feedback" dir=in action=allow protocol=TCP localport=8765`
-   為什麼要開：同事按「送出回饋」時，是**他的瀏覽器**直接連到**你電腦**的 8765 port。
-   Windows 防火牆預設會擋掉所有「從別台電腦連進來」的連線，不開的話只有你自己在本機評分送得出去。
-   如果只有你自己會評分，網頁的 `FEEDBACK_API` 填 `http://127.0.0.1:8765` 就好，不用開防火牆。
-3. `officialdoc.html` 最上面 `<script>` 裡的 `FEEDBACK_API` 改成你電腦的 IP（cmd 打 `ipconfig` 看 IPv4），
-   再把 html 放回 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\`。
-   網頁右上角顯示「回饋服務：已連線」就是通了。
-4. Pensieve flow：把 `prompt/comment.txt` 新增的「使用者回饋」段落、`prompt/summary.txt` 第 5 條貼進 flow 並**發布**，
-   而且確認 **comment 那個 node 讀得到原始的 `input`**（不是只吃 summary node 的輸出），
-   否則「參考回饋」根本傳不到它手上。
+   為什麼：網頁本身走的是那台既有的網站 port，但回饋服務是另一個 port（8765）。
+   同事按「送出回饋」時，是他的瀏覽器連進這台的 8765，Windows 防火牆預設會擋掉這種「從別台連進來」的連線。
+3. 網頁右上角顯示「回饋服務：已連線」就是通了。服務沒開時回饋會先暫存在評分者的瀏覽器，連上後自動補送。
 
-### 注意
+### Pensieve 知識庫
 
-* 你電腦關機或服務沒開時，網頁上的回饋會先暫存在評分者瀏覽器的 localStorage，下次開網頁且服務連得上時自動補送。
-* 如果網頁是 `https://` 開的，瀏覽器會擋住呼叫 `http://` 的回饋服務（mixed content）。目前網頁是 `http://` 就沒問題。
+1. 把知識庫的 `vector_id` 存成單行文字檔 `knowledge\vector_id.txt`
+   （或設環境變數 `PENSIEVE_VECTOR_ID`）。這個 id 等於寫入權限，不要 commit。
+2. 手動測一次：`python feedback_knowledge.py upload --force`，看到 `SuccessFile` 有檔名就成功。
+3. 在 Pensieve flow 裡，**comment 那個 LLM node 要掛上這個知識庫**，不然上傳了也不會被檢索到。
+
+### Pensieve flow 的 prompt
+
+把 `prompt/comment.txt` 的「使用者回饋」段落、`prompt/summary.txt` 第 5 條貼進 flow 並**發布**，
+而且確認 **comment 那個 node 讀得到原始的 `input`**（不是只吃 summary node 的輸出），
+否則「參考回饋」根本傳不到它手上。
+
+### 日常怎麼用
+
 * 同一種錯一直出現（看 `feedback_digest.md`）→ 直接改 `comment.txt` 的規則，再把 pipeline 的 `PROMPT_VERSION` +1。
-  零星的個案修正不用改規則，靠「參考回饋」自動帶入即可。
-* 回饋只存分數、原因、建議 comment 與當時的公文內容，不記評分人、時間、來源 IP。
-* `knowledge/` 已加進 `.gitignore`，回饋內容不會被 commit。
+  零星的個案修正不用改規則，靠「參考回饋」與知識庫自動帶入即可。
+* `knowledge/` 已加進 `.gitignore`，回饋內容與 vector_id 不會被 commit。

@@ -89,14 +89,18 @@ def load_feedback(path=None):
 
 
 def latest_by_doc(records):
-    """同一篇公文只留最新一筆（使用者改過評分，以最後一次為準）。"""
+    """同一篇公文只留最新一筆（使用者改過評分，以最後一次為準）。
+
+    feedback.jsonl 是依送出順序一行一行附加的，所以檔案裡越後面就越新。
+    回傳的 dict 也照「最後一次被評分」的先後排序（最舊在前）。
+    """
     latest = {}
     for rec in records:
         key = doc_key(rec)
         if not key:
             continue
-        if key not in latest or rec.get("received_at", "") >= latest[key].get("received_at", ""):
-            latest[key] = rec
+        latest.pop(key, None)
+        latest[key] = rec
     return latest
 
 
@@ -150,7 +154,7 @@ def select_examples(record, latest, max_examples=MAX_EXAMPLES,
         if sim >= min_similarity:
             scored.append((sim, fb))
 
-    scored.sort(key=lambda t: (-t[0], t[1]["score"], t[1].get("received_at", "")))
+    scored.sort(key=lambda t: (-t[0], t[1]["score"]))
     return [to_example(fb) for _, fb in scored[:max_examples]]
 
 
@@ -165,7 +169,7 @@ def _md(text):
 
 def build_digest(records):
     latest = latest_by_doc(records)
-    items = sorted(latest.values(), key=lambda r: r.get("received_at", ""), reverse=True)
+    items = list(reversed(latest.values()))      # 新到舊
 
     lines = [
         "# 公文 comment 回饋彙整",
@@ -202,7 +206,6 @@ def build_digest(records):
         lines += [
             f"### {r['score']} 分｜{_md(r.get('來文字號'))}｜{_md(r.get('主旨'))}",
             "",
-            f"- 評分：{_md(r.get('reviewer'))}，{_md(r.get('received_at'))}",
             f"- 當時指派：{_md(r.get('指派人員'))}",
             f"- 當時知會：{_md(r.get('知會人員'))}",
             f"- 當時 comment：{_md(r.get('comment'))}",

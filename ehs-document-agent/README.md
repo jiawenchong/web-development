@@ -211,6 +211,9 @@ feedback_server.py（跑在你電腦上）──寫入──> D:\ASEKH\K20076\20
    瀏覽器打開 `http://127.0.0.1:8765/health` 看到 `"ok": true` 就是好了。
 2. 開防火牆讓別台電腦連得進來（系統管理員 cmd，執行一次）：
    `netsh advfirewall firewall add rule name="officialdoc feedback" dir=in action=allow protocol=TCP localport=8765`
+   為什麼要開：同事按「送出回饋」時，是**他的瀏覽器**直接連到**你電腦**的 8765 port。
+   Windows 防火牆預設會擋掉所有「從別台電腦連進來」的連線，不開的話只有你自己在本機評分送得出去。
+   如果只有你自己會評分，網頁的 `FEEDBACK_API` 填 `http://127.0.0.1:8765` 就好，不用開防火牆。
 3. `officialdoc.html` 最上面 `<script>` 裡的 `FEEDBACK_API` 改成你電腦的 IP（cmd 打 `ipconfig` 看 IPv4），
    再把 html 放回 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\`。
    網頁右上角顯示「回饋服務：已連線」就是通了。
@@ -224,4 +227,5 @@ feedback_server.py（跑在你電腦上）──寫入──> D:\ASEKH\K20076\20
 * 如果網頁是 `https://` 開的，瀏覽器會擋住呼叫 `http://` 的回饋服務（mixed content）。目前網頁是 `http://` 就沒問題。
 * 同一種錯一直出現（看 `feedback_digest.md`）→ 直接改 `comment.txt` 的規則，再把 pipeline 的 `PROMPT_VERSION` +1。
   零星的個案修正不用改規則，靠「參考回饋」自動帶入即可。
+* 回饋只存分數、原因、建議 comment 與當時的公文內容，不記評分人、時間、來源 IP。
 * `knowledge/` 已加進 `.gitignore`，回饋內容不會被 commit。

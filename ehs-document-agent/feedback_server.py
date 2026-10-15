@@ -27,7 +27,6 @@ import os
 import sys
 import threading
 import uuid
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import feedback_knowledge as fk
@@ -49,8 +48,9 @@ MAX_FIELD_CHARS = 4000         # 每個文字欄位最多存幾個字
 
 LOG_FILE = os.path.join(fk.KNOWLEDGE_DIR, "feedback_server.log")
 
+# 只存這些欄位。不記評分人、時間、來源 IP
 TEXT_FIELDS = ("來文字號", "主旨", "summary", "指派人員", "知會人員", "comment",
-               "reason", "suggested_comment", "reviewer")
+               "reason", "suggested_comment")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -136,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):
-        log.info("%s %s", self.client_address[0], fmt % args)
+        pass      # 不留存取紀錄（裡面會有來源 IP）；需要的資訊下面自己記
 
     # ── 路由 ──────────────────────────────────────
     def do_OPTIONS(self):
@@ -154,8 +154,7 @@ class Handler(BaseHTTPRequestHandler):
             latest = fk.latest_by_doc(fk.load_feedback())
             items = {
                 key: {k: r.get(k, "") for k in
-                      ("score", "reason", "suggested_comment", "comment",
-                       "reviewer", "received_at")}
+                      ("score", "reason", "suggested_comment", "comment")}
                 for key, r in latest.items()
             }
             return self._json(200, {"ok": True, "items": items})
@@ -181,15 +180,11 @@ class Handler(BaseHTTPRequestHandler):
 
         rec, error = validate(data)
         if error:
-            log.warning("拒收 %s：%s", self.client_address[0], error)
+            log.warning("拒收：%s", error)
             return self._json(400, {"ok": False, "error": error})
 
-        rec = {
-            "id": uuid.uuid4().hex,
-            "received_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "client_ip": self.client_address[0],
-            **rec,
-        }
+        # id 只是給 pipeline 判斷「這筆回饋重產過了沒」用
+        rec = {"id": uuid.uuid4().hex, **rec}
 
         try:
             append_feedback(rec)
@@ -198,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(500, {"ok": False, "error": f"寫入失敗：{e}"})
 
         log.info("收到回饋 %s 分｜%s｜%s", rec["score"], fk.doc_key(rec), rec["reason"][:40])
-        self._json(200, {"ok": True, "id": rec["id"], "received_at": rec["received_at"]})
+        self._json(200, {"ok": True, "id": rec["id"]})
 
 
 def main():

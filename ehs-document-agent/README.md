@@ -179,3 +179,49 @@ API-key 版本上傳端點。
   PyMuPDF render 出來的頁面圖），把辨識出來的文字塞進現有 `全文` 欄位，
   流程完全不用動 Pensieve 那端。這個做法不需要猜測 API 格式，是相對確定
   能動的備案 —— 如果 10 種都測不出結果，可以考慮改走這條。
+
+---
+
+## Comment 回饋機制（讓 LLM 從使用者評分學習）
+
+### 資料怎麼流
+
+```
+officialdoc.html（每張卡片 comment 下方：1~5 星，低於 5 分必填原因，可選填「建議的 comment」）
+      │ POST http://<你電腦的IP>:8765/feedback
+      ▼
+feedback_server.py（跑在你電腦上）──寫入──> D:\ASEKH\K20076\2026\公文簽核agent\knowledge\feedback.jsonl
+      │
+      ▼ 下次跑 officialdoc_pipeline.py 時
+  ① 每篇公文挑出主旨最像的 ≤3 筆回饋，放在 input 的「參考回饋」欄位一起送給 flow
+  ② 快取裡被打低分的那篇，帶著修正意見自動重新產生一次
+  ③ 產生 knowledge\feedback_digest.md 彙整檔，給人看、用來改 prompt 規則
+```
+
+| 檔案 | 用途 |
+|---|---|
+| `feedback_server.py` | 收回饋的小服務（只用標準函式庫）。`POST /feedback`、`GET /feedback/latest`、`GET /health` |
+| `feedback_knowledge.py` | 讀回饋、挑相似回饋、產生彙整檔。`python feedback_knowledge.py digest` / `preview "主旨"` |
+| `start_feedback_server.bat` | 啟動服務，可放進工作排程器（登入時執行） |
+
+### 第一次要做的設定
+
+1. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 放到跟
+   `officialdoc_pipeline.py` 同一個資料夾，執行 `start_feedback_server.bat`。
+   瀏覽器打開 `http://127.0.0.1:8765/health` 看到 `"ok": true` 就是好了。
+2. 開防火牆讓別台電腦連得進來（系統管理員 cmd，執行一次）：
+   `netsh advfirewall firewall add rule name="officialdoc feedback" dir=in action=allow protocol=TCP localport=8765`
+3. `officialdoc.html` 最上面 `<script>` 裡的 `FEEDBACK_API` 改成你電腦的 IP（cmd 打 `ipconfig` 看 IPv4），
+   再把 html 放回 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\`。
+   網頁右上角顯示「回饋服務：已連線」就是通了。
+4. Pensieve flow：把 `prompt/comment.txt` 新增的「使用者回饋」段落、`prompt/summary.txt` 第 5 條貼進 flow 並**發布**，
+   而且確認 **comment 那個 node 讀得到原始的 `input`**（不是只吃 summary node 的輸出），
+   否則「參考回饋」根本傳不到它手上。
+
+### 注意
+
+* 你電腦關機或服務沒開時，網頁上的回饋會先暫存在評分者瀏覽器的 localStorage，下次開網頁且服務連得上時自動補送。
+* 如果網頁是 `https://` 開的，瀏覽器會擋住呼叫 `http://` 的回饋服務（mixed content）。目前網頁是 `http://` 就沒問題。
+* 同一種錯一直出現（看 `feedback_digest.md`）→ 直接改 `comment.txt` 的規則，再把 pipeline 的 `PROMPT_VERSION` +1。
+  零星的個案修正不用改規則，靠「參考回饋」自動帶入即可。
+* `knowledge/` 已加進 `.gitignore`，回饋內容不會被 commit。

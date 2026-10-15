@@ -42,6 +42,8 @@ import pandas as pd
 import pdfplumber
 import requests
 
+import feedback_knowledge as fk
+
 
 # ═══════════════════════════════════════════════════════════
 # 設定區（要改的東西都在這裡）
@@ -127,6 +129,16 @@ REVIEW_CACHE = os.path.join(WORK_DIR, ".review_cache.json")
 #   同一篇公文會直接命中舊快取，你會以為 prompt 沒生效。
 #   （臨時想重跑一次而不想動這裡，就加 --no-cache。）
 PROMPT_VERSION = 1
+
+# ── 使用者回饋（officialdoc.html 上的評分）──────────
+#   回饋由 feedback_server.py 寫進 knowledge\feedback.jsonl（路徑設定在 feedback_knowledge.py）。
+#   開啟後：
+#     * 每篇公文送出時，會帶上主旨最相近的幾筆回饋，放在 input 的「參考回饋」欄位
+#     * 快取裡的 comment 被打了低於 5 分 → 這篇會帶著那筆修正意見重新產生一次
+#   flow 的 comment prompt 要有對應的說明（見 prompt/comment.txt「使用者回饋」段落），
+#   而且 comment 那個 node 必須讀得到原始的 input。
+USE_FEEDBACK = True
+FEEDBACK_FIELD = "參考回饋"
 
 # ── STEP 4：最終輸出 ───────────────────────────────
 OUTPUT_JSON = r"\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc.json"
@@ -605,35 +617,87 @@ def merge(record, review):
     }
 
 
-def review_per_doc(session, token, records, use_cache=True):
+def load_feedback_index():
+    """讀使用者回饋，依公文去重。讀不到只記 log，不影響審核。"""
+    if not USE_FEEDBACK:
+        return {}
+    try:
+        latest = fk.latest_by_doc(fk.load_feedback())
+    except OSError as e:
+        log.warning("回饋檔讀取失敗，這次不帶參考回饋：%s", e)
+        return {}
+    low = sum(1 for r in latest.values() if r["score"] < 5)
+    log.info("讀入 %d 篇公文的使用者回饋（其中低於 5 分 %d 篇）：%s",
+             len(latest), low, fk.FEEDBACK_FILE)
+    return latest
+
+
+def doc_payload(rec, feedback):
+    """送給 flow 的一篇公文。有相關回饋才加「參考回饋」欄位，沒有就跟以前完全一樣。"""
+    item = {"來文字號": rec["來文字號"], "主旨": rec["主旨"], "全文": rec["全文"]}
+    examples = fk.select_examples(rec, feedback) if feedback else []
+    if examples:
+        item[FEEDBACK_FIELD] = examples
+    return item
+
+
+def needs_regenerate(rec, cached, feedback):
+    """快取裡這篇的 comment 被打了低於 5 分、且還沒針對那筆回饋重產過 → 回傳那筆回饋。"""
+    fb = feedback.get(fk.doc_key(rec))
+    if not fb or fb["score"] >= 5:
+        return None
+    if norm(fb.get("comment")) != norm(cached.get("comment")):
+        return None      # 評的是更早的版本，現在的 comment 已經換過了
+    if cached.get("_regenerated_for") == fb.get("id"):
+        return None      # 已經帶這筆回饋重產過一次，不要每次跑都重打
+    return fb
+
+
+def review_per_doc(session, token, records, use_cache=True, feedback=None):
+    feedback = feedback or {}
     cache = load_cache() if use_cache else {}
     if not use_cache:
         log.info("--no-cache：略過快取，每篇都重新呼叫 Pensieve。")
-    results, hits, fails = [], 0, 0
+    results, hits, fails, regens = [], 0, 0, 0
 
     for i, rec in enumerate(records, 1):
         key = cache_key(rec)
+        regen_fb = None
 
         if use_cache and key in cache:
-            hits += 1
-            log.info("[%d/%d] %s → 快取命中", i, len(records), rec["來文字號"])
-            results.append(merge(rec, cache[key]))
-            continue
+            regen_fb = needs_regenerate(rec, cache[key], feedback)
+            if regen_fb is None:
+                hits += 1
+                log.info("[%d/%d] %s → 快取命中", i, len(records), rec["來文字號"])
+                results.append(merge(rec, cache[key]))
+                continue
+            regens += 1
+            log.info("[%d/%d] %s → 目前的 comment 被評 %d 分，帶修正意見重新產生",
+                     i, len(records), rec["來文字號"], regen_fb["score"])
 
         # 包成 1 筆的陣列，讓 flow 收到的形狀跟 batch 模式一致
-        payload = [{"來文字號": rec["來文字號"], "主旨": rec["主旨"], "全文": rec["全文"]}]
+        payload = [doc_payload(rec, feedback)]
+        n_fb = len(payload[0].get(FEEDBACK_FIELD, []))
 
         try:
             raw = call_pensieve(session, token, payload)
             review = normalize_review(parse_reviews(raw)[0])
+            if regen_fb:
+                review["_regenerated_for"] = regen_fb.get("id")
+                if norm(review["comment"]) == norm(regen_fb.get("comment")):
+                    log.warning("   重新產生後 comment 沒有變——確認 flow 的 comment node "
+                                "讀得到 input 裡的「%s」", FEEDBACK_FIELD)
             cache[key] = review
-            log.info("[%d/%d] %s → %s", i, len(records),
-                     rec["來文字號"], review["comment"][:30])
+            log.info("[%d/%d] %s → %s%s", i, len(records), rec["來文字號"],
+                     review["comment"][:30], f"（參考回饋 {n_fb} 筆）" if n_fb else "")
         except (RuntimeError, ValueError, json.JSONDecodeError, IndexError) as e:
-            fails += 1
             log.error("[%d/%d] %s → 失敗：%s: %s",
                       i, len(records), rec["來文字號"], type(e).__name__, e)
-            review = FAILED_REVIEW
+            if regen_fb:
+                review = cache[key]      # 重產失敗就沿用原本的結果，下次再試
+            else:
+                fails += 1
+                review = FAILED_REVIEW
 
         results.append(merge(rec, review))
         time.sleep(PENSIEVE_GAP)
@@ -645,7 +709,7 @@ def review_per_doc(session, token, records, use_cache=True):
         cache = merged
 
     atomic_write_json(REVIEW_CACHE, cache)
-    log.info("STEP 3 完成：快取命中 %d、失敗 %d", hits, fails)
+    log.info("STEP 3 完成：快取命中 %d、依回饋重產 %d、失敗 %d", hits, regens, fails)
 
     if fails == len(records) and records:
         raise RuntimeError("所有公文都審核失敗，不覆蓋線上檔案。")
@@ -653,12 +717,13 @@ def review_per_doc(session, token, records, use_cache=True):
     return results
 
 
-def review_batch(session, token, records):
+def review_batch(session, token, records, feedback=None):
     """整包一次送。回來後用「來文字號」對回去，不靠順序。"""
+    payload = [doc_payload(r, feedback) for r in records]
     log.info("整批送出 %d 篇（%d 字元）", len(records),
-             len(json.dumps(records, ensure_ascii=False)))
+             len(json.dumps(payload, ensure_ascii=False)))
 
-    raw = call_pensieve(session, token, records)
+    raw = call_pensieve(session, token, payload)
     items = [it for it in parse_reviews(raw) if isinstance(it, dict)]
     log.info("回來 %d 筆", len(items))
 
@@ -715,12 +780,15 @@ def step3_review(records, dry_run=False, use_cache=True):
     log.info("STEP 3 開始（%s 模式，PROMPT_VERSION=%d），共 %d 篇",
              SEND_MODE, PROMPT_VERSION, len(records))
     token = get_token()
+    feedback = load_feedback_index()
 
     with requests.Session() as session:
         session.headers.update({"Content-Type": "application/json"})
         if SEND_MODE == "batch":
-            return review_batch(session, token, records)   # batch 模式不使用快取
-        return review_per_doc(session, token, records, use_cache=use_cache)
+            # batch 模式不使用快取
+            return review_batch(session, token, records, feedback=feedback)
+        return review_per_doc(session, token, records, use_cache=use_cache,
+                              feedback=feedback)
 
 
 def probe(records, raw_file=None):
@@ -750,10 +818,7 @@ def probe(records, raw_file=None):
         if not records:
             log.error("沒有公文可以測。")
             return 1
-        rec = records[0]
-        body = build_body(token, [{"來文字號": rec["來文字號"],
-                                   "主旨": rec["主旨"],
-                                   "全文": rec["全文"]}])
+        body = build_body(token, [doc_payload(records[0], load_feedback_index())])
 
     print("─" * 60)
     print("送出的 body（token 已遮蔽）：")
@@ -832,6 +897,13 @@ def main():
 
         step4_publish(results)
         step5_send_mail(results)
+
+        # 順手更新回饋彙整檔；失敗不影響主流程
+        if USE_FEEDBACK:
+            try:
+                log.info("回饋彙整已更新：%s", fk.write_digest())
+            except OSError as e:
+                log.warning("回饋彙整產生失敗：%s", e)
 
         log.info("全部完成，耗時 %s", datetime.now() - started)
         return 0

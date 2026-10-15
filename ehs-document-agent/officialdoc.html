@@ -347,6 +347,120 @@
             border-color: var(--success);
             color: #ffffff;
         }
+
+        .action-btn:disabled,
+        .action-btn:disabled:hover {
+            opacity: 0.45;
+            cursor: not-allowed;
+            background-color: #ffffff;
+            color: var(--text-main);
+            border-color: var(--tech-gray-border);
+        }
+
+        /* ── 回饋服務狀態 / 評分人 ── */
+        .server-pill {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            background-color: var(--tech-gray-bg);
+            border: 1px solid var(--border-light);
+            border-radius: 999px;
+            padding: 3px 12px;
+        }
+        .server-pill.online {
+            color: var(--success);
+            background-color: var(--success-bg);
+            border-color: rgba(16, 185, 129, 0.25);
+        }
+        .server-pill.offline {
+            color: var(--warning);
+            background-color: var(--warning-bg);
+            border-color: var(--warning-border);
+        }
+
+        .reviewer-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+            font-size: 13px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .reviewer-input {
+            flex: 0 1 320px;
+            min-width: 0;
+            padding: 7px 12px;
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            font-size: 13px;
+            color: var(--text-title);
+            background-color: var(--panel-bg);
+            outline: none;
+        }
+        .reviewer-input:focus { border-color: #94a3b8; }
+
+        /* ── Feedback ── */
+        .feedback-box {
+            border: 1px dashed var(--tech-gray-border);
+            border-radius: 6px;
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .star-row { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+
+        .star-btn {
+            background: none;
+            border: none;
+            padding: 0 2px;
+            font-size: 22px;
+            line-height: 1;
+            color: #cbd5e1;
+            cursor: pointer;
+            transition: color 0.1s ease, transform 0.1s ease;
+        }
+        .star-btn:hover { transform: scale(1.12); }
+        .star-btn.on { color: #f59e0b; }
+
+        .score-hint { font-size: 12px; color: var(--text-muted); margin-left: 8px; }
+
+        .fb-textarea {
+            width: 100%;
+            box-sizing: border-box;
+            min-height: 60px;
+            resize: vertical;
+            padding: 8px 10px;
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            font: inherit;
+            font-size: 13px;
+            color: var(--text-title);
+            background-color: var(--panel-bg);
+            outline: none;
+        }
+        .fb-textarea:focus { border-color: #94a3b8; box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.04); }
+        .fb-textarea.required-missing { border-color: var(--warning-border); background-color: var(--warning-bg); }
+
+        .fb-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+
+        .fb-status { font-size: 12px; color: var(--text-muted); }
+        .fb-status.ok { color: var(--success); }
+        .fb-status.warn { color: var(--warning); }
+        .fb-status.err { color: #ef4444; }
+
+        .fb-done {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            font-size: 13px;
+        }
+        .fb-done-stars { color: #f59e0b; letter-spacing: 1px; }
+        .fb-done-text { color: var(--text-main); white-space: pre-line; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -365,6 +479,12 @@
             目前共有<span id="pending-count" class="count-number">0</span>件公文待簽核
         </div>
         <span id="unknown-note" class="pending-note" style="display:none;"></span>
+        <span id="fb-server" class="server-pill">回饋服務連線中…</span>
+    </div>
+
+    <div class="reviewer-row">
+        <label for="reviewer-name">評分人</label>
+        <input type="text" id="reviewer-name" class="reviewer-input" placeholder="（選填）姓名或工號，會記在這台電腦" />
     </div>
 
     <div class="search-container">
@@ -381,13 +501,38 @@
 </div>
 
 <script>
+    // ===== 回饋服務設定 =====
+    // feedback_server.py 跑在哪台電腦，就填那台的 IP（在那台電腦開 cmd 打 ipconfig 看 IPv4 位址）。
+    // 測試時可在網址後面加 ?fbapi=http://127.0.0.1:8765 臨時覆蓋。
+    const FEEDBACK_API = (new URLSearchParams(location.search).get('fbapi')
+                          || 'http://YOUR-PC-IP:8765').replace(/\/+$/, '');
+    const FEEDBACK_TIMEOUT_MS = 5000;
+    const QUEUE_KEY = 'officialdoc_feedback_queue';     // 送不出去的回饋先暫存在瀏覽器
+    const REVIEWER_KEY = 'officialdoc_reviewer';
+
     document.addEventListener("DOMContentLoaded", () => {
         const container = document.getElementById("summary-container");
         const pendingCountSpan = document.getElementById("pending-count");
         const unknownNote = document.getElementById("unknown-note");
         const searchBox = document.getElementById("search-box");
+        const serverPill = document.getElementById("fb-server");
+        const reviewerInput = document.getElementById("reviewer-name");
 
         let allDocs = [];
+
+        // localStorage 在無痕模式或被封鎖時會丟例外，一律包起來
+        function storageGet(key, fallback) {
+            try {
+                const v = localStorage.getItem(key);
+                return v == null ? fallback : JSON.parse(v);
+            } catch (e) { return fallback; }
+        }
+        function storageSet(key, value) {
+            try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* 忽略 */ }
+        }
+
+        reviewerInput.value = storageGet(REVIEWER_KEY, '');
+        reviewerInput.addEventListener("input", () => storageSet(REVIEWER_KEY, reviewerInput.value.trim()));
 
         // 資料來自 LLM，一律轉義後才放進 innerHTML
         function escapeHtml(value) {
@@ -445,10 +590,11 @@
                 // =================================================
 
                 // _id 用索引，按鈕就不必把字號串進 onclick 的引號裡
-                allDocs = rawDocs.map((item, i) => ({ ...item, _id: i, isRead: false }));
+                allDocs = rawDocs.map((item, i) => ({ ...item, _id: i, isRead: false, _fb: newFeedbackState() }));
 
                 if (allDocs.length > 0) {
                     renderCards();
+                    syncFeedback();
                 } else {
                     pendingCountSpan.innerText = "0";
                     container.innerHTML = `<div class="status-message">沒有找到任何公文紀錄。</div>`;
@@ -512,9 +658,268 @@
             }
         }
 
+        // ===================== Feedback =====================
+
+        const SCORE_HINTS = {
+            0: '點星星替這則 comment 評分',
+            1: '1 分：完全不對',
+            2: '2 分：大部分不對',
+            3: '3 分：方向對，但要大改',
+            4: '4 分：小地方要修',
+            5: '5 分：就是我要的，不需要填原因'
+        };
+
+        function newFeedbackState() {
+            return { score: 0, reason: '', suggestion: '', editing: false,
+                     sending: false, status: '', statusKind: '', submitted: null };
+        }
+
+        // 一篇公文的識別。規則必須跟 feedback_knowledge.py 的 doc_key() 一致
+        function docKey(item) {
+            const no = String(item.來文字號 == null ? '' : item.來文字號).trim();
+            if (!['', 'nan', 'none', '—', '-', '無'].includes(no.toLowerCase())) return no;
+            return String(item.主旨 == null ? '' : item.主旨).trim();
+        }
+
+        // 比對 comment 是否同一則（跟 pipeline 的 norm() 一樣：全形轉半形、去空白、轉小寫）
+        function normText(s) {
+            return String(s == null ? '' : s).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+        }
+
+        function findDoc(id) { return allDocs.find(d => d._id === id); }
+
+        function canSubmit(fb) {
+            return !fb.sending && fb.score >= 1 && (fb.score === 5 || fb.reason.trim().length > 0);
+        }
+
+        function starText(score) { return '★'.repeat(score) + '☆'.repeat(5 - score); }
+
+        function setServerStatus(online) {
+            serverPill.className = `server-pill ${online ? 'online' : 'offline'}`;
+            serverPill.innerText = online ? '回饋服務：已連線' : '回饋服務：未連線（回饋會先暫存在這台電腦）';
+        }
+
+        async function fetchWithTimeout(url, options = {}) {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), FEEDBACK_TIMEOUT_MS);
+            try {
+                return await fetch(url, { ...options, signal: ctrl.signal });
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        // 連線失敗會丟例外；伺服器有回應時回傳 { ok, status, data }
+        async function postFeedback(payload) {
+            const res = await fetchWithTimeout(`${FEEDBACK_API}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            let data = null;
+            try { data = await res.json(); } catch (e) { /* 非 JSON 回應 */ }
+            return { ok: res.ok && !!(data && data.ok), status: res.status, data };
+        }
+
+        function enqueue(payload) {
+            const queue = storageGet(QUEUE_KEY, []);
+            queue.push(payload);
+            storageSet(QUEUE_KEY, queue);
+        }
+
+        // 把之前送不出去的回饋補送。連不上就停，剩下的留到下次
+        async function flushQueue() {
+            const queue = storageGet(QUEUE_KEY, []);
+            if (queue.length === 0) return;
+            const remaining = [];
+            for (let i = 0; i < queue.length; i++) {
+                try {
+                    const r = await postFeedback(queue[i]);
+                    if (!r.ok && r.status >= 500) remaining.push(queue[i]);
+                    // 4xx 是資料本身被拒收，重送也不會過，直接丟掉
+                } catch (e) {
+                    remaining.push(...queue.slice(i));
+                    break;
+                }
+            }
+            storageSet(QUEUE_KEY, remaining);
+        }
+
+        // 讀伺服器上「每篇最新一筆回饋」，評的是目前這則 comment 才顯示成已回饋
+        async function syncFeedback() {
+            await flushQueue();
+
+            let latest = {};
+            try {
+                const res = await fetchWithTimeout(`${FEEDBACK_API}/feedback/latest`, { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                latest = (data && data.items) || {};
+                setServerStatus(true);
+            } catch (e) {
+                console.warn('回饋服務連不上：', FEEDBACK_API, e);
+                setServerStatus(false);
+            }
+
+            const queued = storageGet(QUEUE_KEY, []);
+            allDocs.forEach(item => {
+                const key = docKey(item);
+                const sameComment = r => normText(r.comment) === normText(item.comment);
+                const q = queued.slice().reverse().find(p => docKey(p) === key && sameComment(p));
+                const s = latest[key];
+                if (q) {
+                    item._fb.submitted = { ...q, queued: true };
+                } else if (s && sameComment(s)) {
+                    item._fb.submitted = s;
+                }
+            });
+            renderCards();
+        }
+
+        function renderFeedback(item) {
+            const fb = item._fb;
+            const id = item._id;
+
+            if (fb.submitted && !fb.editing) {
+                const s = fb.submitted;
+                const meta = s.queued
+                    ? '<span class="fb-status warn">已暫存在這台電腦，回饋服務連上後會自動補送</span>'
+                    : `<span class="fb-status ok">已回饋${s.received_at ? ' · ' + escapeHtml(s.received_at) : ''}${s.reviewer ? ' · ' + escapeHtml(s.reviewer) : ''}</span>`;
+                return `
+                    <div class="feedback-box">
+                        <div class="fb-done">
+                            <div>
+                                <div><span class="fb-done-stars">${starText(s.score)}</span> <strong>${s.score} 分</strong> ${meta}</div>
+                                ${s.reason ? `<div class="fb-done-text">原因：${escapeHtml(s.reason)}</div>` : ''}
+                                ${s.suggested_comment ? `<div class="fb-done-text">建議 comment：${escapeHtml(s.suggested_comment)}</div>` : ''}
+                            </div>
+                            <button class="action-btn" onclick="editFeedback(${id})">修改</button>
+                        </div>
+                    </div>`;
+            }
+
+            const needReason = fb.score > 0 && fb.score < 5;
+            const stars = [1, 2, 3, 4, 5].map(n =>
+                `<button type="button" class="star-btn ${n <= fb.score ? 'on' : ''}" onclick="setScore(${id}, ${n})" aria-label="${n} 分" title="${n} 分">★</button>`
+            ).join('');
+
+            return `
+                <div class="feedback-box">
+                    <div class="star-row">${stars}<span class="score-hint">${SCORE_HINTS[fb.score]}</span></div>
+                    ${needReason ? `
+                    <textarea class="fb-textarea fb-reason ${fb.reason.trim() ? '' : 'required-missing'}"
+                              placeholder="哪裡不是你要的？（必填）例：K11 屬二園區，應該指派 Dino；知會少了 Ellis"
+                              oninput="setFeedbackText(${id}, 'reason', this)">${escapeHtml(fb.reason)}</textarea>
+                    <textarea class="fb-textarea"
+                              placeholder="（選填）你希望的 comment 長這樣…"
+                              oninput="setFeedbackText(${id}, 'suggestion', this)">${escapeHtml(fb.suggestion)}</textarea>` : ''}
+                    <div class="fb-actions">
+                        <button class="action-btn fb-submit" onclick="submitFeedback(${id})" ${canSubmit(fb) ? '' : 'disabled'}>${fb.sending ? '送出中…' : '送出回饋'}</button>
+                        ${fb.submitted ? `<button class="action-btn" onclick="cancelFeedbackEdit(${id})">取消</button>` : ''}
+                        <span class="fb-status ${fb.statusKind}">${escapeHtml(fb.status)}</span>
+                    </div>
+                </div>`;
+        }
+
+        // 只重畫那一張卡的回饋區，不重畫整頁（才不會打字打到一半失去焦點）
+        function renderFeedbackSlot(item) {
+            const slot = container.querySelector(`.summary-card[data-id="${item._id}"] .fb-slot`);
+            if (slot) slot.innerHTML = renderFeedback(item);
+            return slot;
+        }
+
+        window.setScore = function(id, score) {
+            const item = findDoc(id);
+            if (!item) return;
+            item._fb.score = score;
+            item._fb.status = '';
+            const slot = renderFeedbackSlot(item);
+            const reason = slot && slot.querySelector('.fb-reason');
+            if (reason) reason.focus();
+        };
+
+        window.setFeedbackText = function(id, field, el) {
+            const item = findDoc(id);
+            if (!item) return;
+            item._fb[field] = el.value;
+            const btn = el.closest('.fb-slot').querySelector('.fb-submit');
+            if (btn) btn.disabled = !canSubmit(item._fb);
+            if (field === 'reason') el.classList.toggle('required-missing', !el.value.trim());
+        };
+
+        window.editFeedback = function(id) {
+            const item = findDoc(id);
+            if (!item || !item._fb.submitted) return;
+            const s = item._fb.submitted;
+            Object.assign(item._fb, {
+                editing: true, score: s.score, reason: s.reason || '',
+                suggestion: s.suggested_comment || '', status: '', statusKind: ''
+            });
+            renderFeedbackSlot(item);
+        };
+
+        window.cancelFeedbackEdit = function(id) {
+            const item = findDoc(id);
+            if (!item) return;
+            item._fb.editing = false;
+            renderFeedbackSlot(item);
+        };
+
+        window.submitFeedback = async function(id) {
+            const item = findDoc(id);
+            if (!item || !canSubmit(item._fb)) return;
+            const fb = item._fb;
+            const lowScore = fb.score < 5;
+
+            const payload = {
+                來文字號: item.來文字號 || '',
+                主旨: item.主旨 || '',
+                summary: item.summary || '',
+                指派人員: item.指派人員 || '',
+                知會人員: item.知會人員 || '',
+                comment: item.comment || '',
+                score: fb.score,
+                reason: lowScore ? fb.reason.trim() : '',
+                suggested_comment: lowScore ? fb.suggestion.trim() : '',
+                reviewer: reviewerInput.value.trim()
+            };
+
+            fb.sending = true;
+            fb.status = '';
+            renderFeedbackSlot(item);
+
+            try {
+                const r = await postFeedback(payload);
+                if (r.ok) {
+                    fb.submitted = { ...payload, received_at: r.data.received_at };
+                    fb.editing = false;
+                    setServerStatus(true);
+                } else if (r.status >= 500) {
+                    enqueue(payload);
+                    fb.submitted = { ...payload, queued: true };
+                    fb.editing = false;
+                } else {
+                    fb.status = (r.data && r.data.error) || `回饋服務回應 HTTP ${r.status}`;
+                    fb.statusKind = 'err';
+                }
+            } catch (e) {
+                // 連不上：先存在這台電腦的瀏覽器，下次開頁面時自動補送
+                enqueue(payload);
+                fb.submitted = { ...payload, queued: true };
+                fb.editing = false;
+                setServerStatus(false);
+            }
+
+            fb.sending = false;
+            renderFeedbackSlot(item);
+        };
+
+        // ====================================================
+
         function createCardElement(item) {
             const card = document.createElement("div");
             card.className = `summary-card ${item.isRead ? 'is-read' : ''}`;
+            card.dataset.id = item._id;
 
             card.innerHTML = `
                 <div class="grid-row">
@@ -564,6 +969,11 @@
                                 <p class="field-target-text field-value">${escapeHtml(item.comment || '無')}</p>
                             </div>
                         </div>
+                    </div>
+
+                    <div class="field-group">
+                        <span class="field-label">Feedback (這則 comment 是你要的嗎？)</span>
+                        <div class="fb-slot">${renderFeedback(item)}</div>
                     </div>
                 </div>
             `;

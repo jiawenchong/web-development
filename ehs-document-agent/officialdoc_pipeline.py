@@ -138,7 +138,7 @@ PROMPT_VERSION = 3
 #   而且 comment 那個 node 必須讀得到原始的 input。
 USE_FEEDBACK = True
 FEEDBACK_FIELD = "參考回饋"
-FEEDBACK_DIR = r"\\10.10.51.67\data\officialdoc"
+FEEDBACK_DIR = r"\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc"
 
 # 每次跑完把回饋整理成案例卡，覆蓋上傳到 Pensieve 知識庫。
 # 內容沒變就不重傳；上傳失敗只記警告，不影響公文審核結果。

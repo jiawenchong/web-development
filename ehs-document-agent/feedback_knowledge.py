@@ -39,7 +39,7 @@ from datetime import datetime
 # ═══════════════════════════════════════════════════════════
 
 # 回饋資料預設放在「這支程式所在的資料夾」。
-#   feedback_server.py 在 10.10.51.67 上跑 → 存在那台的 \\10.10.51.67\data\officialdoc
+#   feedback_server.py 在 10.10.51.67 上跑 → 存在那台的 \\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc
 #   officialdoc_pipeline.py 在你電腦跑 → 由它呼叫 set_knowledge_dir() 指到同一個資料夾
 # 底下所有檔案路徑都由 set_knowledge_dir() 統一算出來（檔案最下面會先套用一次預設值）。
 KNOWLEDGE_DIR = os.path.dirname(os.path.abspath(__file__))

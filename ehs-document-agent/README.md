@@ -189,10 +189,10 @@ API-key 版本上傳端點。
 | 位置 | 放什麼 | 怎麼跑 |
 |---|---|---|
 | **你的電腦** `D:\ASEKH\K20076\2026\公文簽核agent\` | `officialdoc_pipeline.py`、`download_report.py`、`pensieve_token.txt`、**`vector_id.txt`** | 照原本的排程跑，不用改 |
-| **10.10.51.67** `\\10.10.51.67\data\officialdoc\` | `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat`；回饋資料也產生在這裡 | 回饋服務開機自動啟動，一直開著 |
+| **10.10.51.67** `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\` | `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat`；回饋資料也產生在這裡 | 回饋服務開機自動啟動，一直開著 |
 | **10.10.51.67** 網頁資料夾 | `officialdoc.html`、`data\officialdoc.json` | 跟原本一樣 |
 
-pipeline 會直接從 `\\10.10.51.67\data\officialdoc` 載入 `feedback_knowledge.py` 並讀寫那裡的回饋資料，
+pipeline 會直接從 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc` 載入 `feedback_knowledge.py` 並讀寫那裡的回饋資料，
 你電腦上不用再放一份。資料夾讀不到時只記警告，公文審核照常跑（只是這次不帶回饋）。
 
 ### 資料怎麼流
@@ -201,7 +201,7 @@ pipeline 會直接從 `\\10.10.51.67\data\officialdoc` 載入 `feedback_knowledg
 officialdoc.html（每張卡片 comment 下方：1~5 星，低於 5 分必填原因，可選填「建議的 comment」）
       │ POST http://10.10.51.67:8765/feedback   （網頁自動用自己的主機名稱，不用填 IP）
       ▼
-feedback_server.py（在 .67）──寫入──> \\10.10.51.67\data\officialdoc\feedback.jsonl
+feedback_server.py（在 .67）──寫入──> \\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\feedback.jsonl
       │
       ▼ 你電腦的 pipeline 下次排程跑時
   ① prompt：每篇公文挑主旨最像的 ≤3 筆回饋，放在 input 的「參考回饋」欄位送給 flow
@@ -213,7 +213,7 @@ feedback_server.py（在 .67）──寫入──> \\10.10.51.67\data\officialdo
 
 只存分數、原因、建議 comment 與當時的公文內容，不記評分人、時間、來源 IP。
 
-### \\10.10.51.67\data\officialdoc 裡會出現的檔案
+### \\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc 裡會出現的檔案
 
 | 檔案 | 誰寫的 | 內容 |
 |---|---|---|
@@ -225,10 +225,10 @@ feedback_server.py（在 .67）──寫入──> \\10.10.51.67\data\officialdo
 
 ### 第一次設定（.67 只有資料夾權限、回饋服務跑在你電腦的做法）
 
-1. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 複製到 `\\10.10.51.67\data\officialdoc\`。
+1. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 複製到 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\`。
 2. 你的電腦：換上新版 `officialdoc_pipeline.py`，把 vector_id 存成 `D:\ASEKH\K20076\2026\公文簽核agent\vector_id.txt`。
-3. 你的電腦：雙擊 `\\10.10.51.67\data\officialdoc\start_feedback_server.bat`，黑色視窗要一直開著（關掉＝服務停止）。
-   瀏覽器開 `http://127.0.0.1:8765/health`，看到 `"ok": true`，而且 `file` 是 `\\10.10.51.67\data\officialdoc\feedback.jsonl`。
+3. 你的電腦：雙擊 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\start_feedback_server.bat`，黑色視窗要一直開著（關掉＝服務停止）。
+   瀏覽器開 `http://127.0.0.1:8765/health`，看到 `"ok": true`，而且 `file` 是 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\feedback.jsonl`。
 4. 開機自動啟動：`Win+R` → 輸入 `shell:startup` → 在打開的資料夾裡建立 `start_feedback_server.bat` 的捷徑
    （捷徑內容 →「執行」選「最小化」，視窗就不會擋畫面）。
 5. 把新版 `officialdoc.html` 複製到網頁資料夾，打開網頁，右上角顯示「回饋服務：已連線」。
@@ -244,12 +244,12 @@ feedback_server.py（在 .67）──寫入──> \\10.10.51.67\data\officialdo
 ### 驗證
 
 1. 你電腦執行 `python officialdoc_pipeline.py`，log 要看到「讀入 N 篇公文的使用者回饋」。
-2. 網頁上隨便評一篇 3 分並寫原因 → `\\10.10.51.67\data\officialdoc\feedback.jsonl` 多一行。
+2. 網頁上隨便評一篇 3 分並寫原因 → `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\feedback.jsonl` 多一行。
 3. 再跑一次 pipeline → log 出現「依回饋重產 1」與「知識庫：已上傳」，Pensieve 知識庫裡只有一份 `officialdoc_feedback_cases.txt`。
 
 ### 日常怎麼用
 
 * 同一種錯一直出現（看 `feedback_digest.md`）→ 改 `comment.txt` 的規則，貼進 flow 發布，再把 pipeline 的 `PROMPT_VERSION` +1。
   零星的個案修正不用改規則，靠「參考回饋」與知識庫自動帶入即可。
-* ⚠️ 如果 `\\10.10.51.67\data` 其實就是網頁的 `data` 資料夾，裡面的檔案用瀏覽器也打得開（例如 `/data/officialdoc/feedback.jsonl`）。
+* ⚠️ 這個資料夾就是網頁的 `data` 資料夾，裡面的檔案用瀏覽器也打得開（例如 `/data/officialdoc/feedback.jsonl`）。
   回饋內容被看到問題不大，但 **vector_id 一定要放你電腦**，不要放這裡。

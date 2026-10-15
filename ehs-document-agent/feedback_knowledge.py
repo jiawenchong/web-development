@@ -300,7 +300,8 @@ def get_vector_id():
         return env
     path = vector_id_file()
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        # utf-8-sig：記事本存成「UTF-8 (BOM)」時開頭會多一個看不見的字元，這樣讀會自動去掉
+        with open(path, "r", encoding="utf-8-sig") as f:
             value = f.read().strip()
         if value:
             return value

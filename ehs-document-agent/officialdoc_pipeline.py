@@ -145,9 +145,13 @@ FEEDBACK_DIR = r"\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officia
 # 內容沒變就不重傳；上傳失敗只記警告，不影響公文審核結果。
 USE_VECTOR_UPLOAD = True
 
-# ★ 知識庫的 vector_id 存成單行文字檔放這裡（跟 pensieve_token.txt 同一個資料夾）★
+# ★ 知識庫的 vector_id 存成單行文字檔 vector_id.txt ★
+#   放在「officialdoc_pipeline.py 同一個資料夾」或 WORK_DIR 都可以，依序找第一個存在的。
 #   放你電腦、不放共用資料夾，別人就拿不到知識庫的寫入權限。
-VECTOR_ID_FILE = os.path.join(WORK_DIR, "vector_id.txt")
+VECTOR_ID_FILES = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "vector_id.txt"),
+    os.path.join(WORK_DIR, "vector_id.txt"),
+]
 
 # ── STEP 4：最終輸出 ───────────────────────────────
 OUTPUT_JSON = r"\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc.json"
@@ -645,9 +649,25 @@ def load_feedback_module():
         log.warning("載入 feedback_knowledge.py 失敗，這次不使用回饋：%s", e)
         return None
     module.set_knowledge_dir(FEEDBACK_DIR)
-    module.VECTOR_ID_FILE = VECTOR_ID_FILE
+    module.VECTOR_ID_FILE = find_vector_id_file()
     fk = module
     return fk
+
+
+def find_vector_id_file():
+    """回傳第一個存在的 vector_id.txt；都沒有就回傳第一個候選路徑，並提示常見的檔名錯誤。"""
+    candidates = list(dict.fromkeys(VECTOR_ID_FILES))      # 去重、保留順序
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+
+    for path in candidates:
+        # Windows 預設隱藏副檔名：檔案總管顯示 vector_id.txt，實際可能是 vector_id.txt.txt
+        if os.path.isfile(path + ".txt"):
+            log.warning("找到 %s.txt——檔名多了一個 .txt，請改名成 vector_id.txt", path)
+    if USE_VECTOR_UPLOAD:
+        log.warning("找不到 vector_id.txt，找過：%s", "、".join(candidates))
+    return candidates[0]
 
 
 def load_feedback_index():

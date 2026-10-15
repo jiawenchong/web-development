@@ -229,12 +229,11 @@ feedback_server.py（在 .67）──寫入──> \\10.10.51.67\d$\FAC_Web\agen
 2. 你的電腦：換上新版 `officialdoc_pipeline.py`，把 vector_id 存成 `D:\ASEKH\K20076\2026\公文簽核agent\vector_id.txt`。
 3. 你的電腦：雙擊 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\start_feedback_server.bat`，黑色視窗要一直開著（關掉＝服務停止）。
    瀏覽器開 `http://127.0.0.1:8765/health`，看到 `"ok": true`，而且 `file` 是 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\feedback.jsonl`。
-4. 開機自動啟動：
-   * 先把 .67 的帳號密碼存進 Windows 認證管理員（只做一次），重開機才不用再輸入密碼：
-     `cmdkey /add:10.10.51.67 /user:網域\帳號 /pass`（會另外問密碼），用 `cmdkey /list` 確認。
-   * 把 `launch_feedback_server.bat` 放在**你電腦本機**（例如 `D:\ASEKH\K20076\2026\公文簽核agent\`），
-     `Win+R` → `shell:startup` → 建立它的捷徑（捷徑內容 →「執行」選「最小化」）。
-     它會等 .67 連得上（最多 5 分鐘）再啟動回饋服務，避免開機時網路還沒好就失敗。
+4. 開機自動啟動：把 `launch_feedback_server.bat` 放在**你電腦本機**（例如 `D:\ASEKH\K20076\2026\公文簽核agent\`），
+   `Win+R` → `shell:startup` → 建立它的捷徑（捷徑內容 →「執行」選「最小化」）。
+   它會一直等到 .67 連得上才啟動回饋服務；連不上時會自動打開 .67 的資料夾跳出登入視窗，輸入一次密碼即可。
+   （公司政策禁止電腦儲存網路密碼，`cmdkey` 會出現「無法從這個登入工作階段儲存認證」。
+   要完全免輸入密碼，請 IT 把該資料夾的讀寫權限開給你的網域帳號。）
 5. 把新版 `officialdoc.html` 複製到網頁資料夾，打開網頁，右上角顯示「回饋服務：已連線」。
    網頁會先找 `10.10.51.67:8765`，找不到就自動改連你電腦的 `127.0.0.1:8765`，不用改設定。
 6. Pensieve：

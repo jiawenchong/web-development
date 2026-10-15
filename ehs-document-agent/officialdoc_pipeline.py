@@ -42,8 +42,6 @@ import pandas as pd
 import pdfplumber
 import requests
 
-import feedback_knowledge as fk
-
 
 # ═══════════════════════════════════════════════════════════
 # 設定區（要改的東西都在這裡）
@@ -131,7 +129,8 @@ REVIEW_CACHE = os.path.join(WORK_DIR, ".review_cache.json")
 PROMPT_VERSION = 3
 
 # ── 使用者回饋（officialdoc.html 上的評分）──────────
-#   回饋由 feedback_server.py 寫進 knowledge\feedback.jsonl（路徑設定在 feedback_knowledge.py）。
+#   feedback_server.py 跑在 10.10.51.67，把回饋寫進 FEEDBACK_DIR\feedback.jsonl。
+#   這支程式從 FEEDBACK_DIR 直接載入 feedback_knowledge.py，所以你電腦上不用再放一份。
 #   開啟後：
 #     * 每篇公文送出時，會帶上主旨最相近的幾筆回饋，放在 input 的「參考回饋」欄位
 #     * 快取裡的 comment 被打了低於 5 分 → 這篇會帶著那筆修正意見重新產生一次
@@ -139,10 +138,15 @@ PROMPT_VERSION = 3
 #   而且 comment 那個 node 必須讀得到原始的 input。
 USE_FEEDBACK = True
 FEEDBACK_FIELD = "參考回饋"
+FEEDBACK_DIR = r"\\10.10.51.67\data\officialdoc"
 
-# 每次跑完把回饋整理成案例卡，覆蓋上傳到 Pensieve 知識庫（vector_id 設定在 feedback_knowledge.py）。
+# 每次跑完把回饋整理成案例卡，覆蓋上傳到 Pensieve 知識庫。
 # 內容沒變就不重傳；上傳失敗只記警告，不影響公文審核結果。
 USE_VECTOR_UPLOAD = True
+
+# ★ 知識庫的 vector_id 存成單行文字檔放這裡（跟 pensieve_token.txt 同一個資料夾）★
+#   放你電腦、不放共用資料夾，別人就拿不到知識庫的寫入權限。
+VECTOR_ID_FILE = os.path.join(WORK_DIR, "vector_id.txt")
 
 # ── STEP 4：最終輸出 ───────────────────────────────
 OUTPUT_JSON = r"\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc.json"
@@ -621,9 +625,33 @@ def merge(record, review):
     }
 
 
+fk = None     # feedback_knowledge 模組，由 load_feedback_module() 從 FEEDBACK_DIR 載入
+
+
+def load_feedback_module():
+    """從 10.10.51.67 的共用資料夾載入 feedback_knowledge.py。讀不到就回傳 None，回饋功能這次停用。"""
+    global fk
+    if fk is not None or not USE_FEEDBACK:
+        return fk
+    if not os.path.isdir(FEEDBACK_DIR):
+        log.warning("回饋資料夾讀不到（權限？路徑打錯？），這次不使用回饋：%s", FEEDBACK_DIR)
+        return None
+    if FEEDBACK_DIR not in sys.path:
+        sys.path.insert(0, FEEDBACK_DIR)
+    try:
+        import feedback_knowledge as module
+    except ImportError as e:
+        log.warning("載入 feedback_knowledge.py 失敗，這次不使用回饋：%s", e)
+        return None
+    module.set_knowledge_dir(FEEDBACK_DIR)
+    module.VECTOR_ID_FILE = VECTOR_ID_FILE
+    fk = module
+    return fk
+
+
 def load_feedback_index():
     """讀使用者回饋，依公文去重。讀不到只記 log，不影響審核。"""
-    if not USE_FEEDBACK:
+    if load_feedback_module() is None:
         return {}
     try:
         latest = fk.latest_by_doc(fk.load_feedback())
@@ -647,6 +675,8 @@ def doc_payload(rec, feedback):
 
 def needs_regenerate(rec, cached, feedback):
     """快取裡這篇的 comment 被打了低於 5 分、且還沒針對那筆回饋重產過 → 回傳那筆回饋。"""
+    if not feedback:
+        return None
     fb = feedback.get(fk.doc_key(rec))
     if not fb or fb["score"] >= 5:
         return None
@@ -903,16 +933,16 @@ def main():
         step5_send_mail(results)
 
         # 順手更新回饋彙整檔、同步知識庫；失敗不影響主流程
-        if USE_FEEDBACK:
+        if load_feedback_module() is not None:
             try:
                 log.info("回饋彙整已更新：%s", fk.write_digest())
             except OSError as e:
                 log.warning("回饋彙整產生失敗：%s", e)
-        if USE_FEEDBACK and USE_VECTOR_UPLOAD:
-            try:
-                fk.upload_cases(log=log.info)
-            except (RuntimeError, OSError) as e:
-                log.warning("%s（下次執行會再試）", e)
+            if USE_VECTOR_UPLOAD:
+                try:
+                    fk.upload_cases(log=log.info)
+                except (RuntimeError, OSError) as e:
+                    log.warning("%s（下次執行會再試）", e)
 
         log.info("全部完成，耗時 %s", datetime.now() - started)
         return 0

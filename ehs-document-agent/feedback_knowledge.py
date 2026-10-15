@@ -38,11 +38,11 @@ from datetime import datetime
 # 設定區
 # ═══════════════════════════════════════════════════════════
 
-# 回饋資料放在「這支程式所在資料夾」底下的 knowledge\。
-# 程式搬到哪台電腦，資料就跟著在那台；要指定別的位置就直接改這行。
-KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge")
-FEEDBACK_FILE = os.path.join(KNOWLEDGE_DIR, "feedback.jsonl")
-DIGEST_FILE = os.path.join(KNOWLEDGE_DIR, "feedback_digest.md")
+# 回饋資料預設放在「這支程式所在的資料夾」。
+#   feedback_server.py 在 10.10.51.67 上跑 → 存在那台的 \\10.10.51.67\data\officialdoc
+#   officialdoc_pipeline.py 在你電腦跑 → 由它呼叫 set_knowledge_dir() 指到同一個資料夾
+# 底下所有檔案路徑都由 set_knowledge_dir() 統一算出來（檔案最下面會先套用一次預設值）。
+KNOWLEDGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 每篇公文最多帶幾筆參考回饋。帶太多會把 prompt 撐大，也容易讓 LLM 混淆
 MAX_EXAMPLES = 3
@@ -61,20 +61,16 @@ _EMPTY_DOC_NO = {"", "nan", "none", "—", "-", "無"}
 VECTOR_UPLOAD_URL = "https://pensieve.kh.asegroup.com/api/uploadVector/"
 
 # ★ 知識庫的 vector_id ★
-#   三個來源，由上到下找第一個有值的：這個變數 → 環境變數 PENSIEVE_VECTOR_ID → 下面那個檔案
+#   三個來源，由上到下找第一個有值的：這個變數 → 環境變數 PENSIEVE_VECTOR_ID → VECTOR_ID_FILE
 #   這個 id 等於知識庫的寫入權限，不要 commit 進 git。
+#   上傳是 pipeline 在你電腦做的，所以 pipeline 會把 VECTOR_ID_FILE 指到你電腦的 WORK_DIR，
+#   不放在 10.10.51.67 的共用資料夾（那裡別人也讀得到）。
 VECTOR_ID = ""
-VECTOR_ID_FILE = os.path.join(KNOWLEDGE_DIR, "vector_id.txt")
-
-# 上傳的檔名固定不變。Pensieve 用檔名辨識文件，每次上傳同一個檔名＝覆蓋舊的那份，
-# 知識庫裡就永遠只有「最新一版」的案例，不會累積過時或互相矛盾的內容。
-CASES_FILE = os.path.join(KNOWLEDGE_DIR, "officialdoc_feedback_cases.txt")
 
 # 覆蓋 / 附加如果需要額外參數（例如 {"mode": "replace"}），填在這裡會一起送出
 VECTOR_UPLOAD_EXTRA_DATA = {}
 
 VECTOR_UPLOAD_TIMEOUT = 180
-UPLOAD_STATE_FILE = os.path.join(KNOWLEDGE_DIR, ".vector_upload_state.json")
 
 # 跟 officialdoc_pipeline.py 一樣：內部自簽憑證、內網不走 proxy
 VERIFY_SSL = False
@@ -82,6 +78,29 @@ PROXIES = {"http": None, "https": None}
 
 
 # ═══════════════════════════════════════════════════════════
+
+def set_knowledge_dir(path):
+    """把回饋相關檔案都指到 path 底下。"""
+    global KNOWLEDGE_DIR, FEEDBACK_FILE, DIGEST_FILE, CASES_FILE, UPLOAD_STATE_FILE
+    KNOWLEDGE_DIR = path
+    FEEDBACK_FILE = os.path.join(path, "feedback.jsonl")
+    DIGEST_FILE = os.path.join(path, "feedback_digest.md")
+    # 上傳的檔名固定不變：每次上傳同一個檔名＝覆蓋舊的那份（知識庫設定成 replace），
+    # 知識庫裡永遠只有「最新一版」的案例，不會累積過時或互相矛盾的內容。
+    CASES_FILE = os.path.join(path, "officialdoc_feedback_cases.txt")
+    UPLOAD_STATE_FILE = os.path.join(path, ".vector_upload_state.json")
+
+
+set_knowledge_dir(KNOWLEDGE_DIR)
+
+# 存 vector_id 的單行文字檔。None = 用 KNOWLEDGE_DIR\vector_id.txt；
+# pipeline 會把它設成你電腦 WORK_DIR 底下的檔案。
+VECTOR_ID_FILE = None
+
+
+def vector_id_file():
+    return VECTOR_ID_FILE or os.path.join(KNOWLEDGE_DIR, "vector_id.txt")
+
 
 def norm(s):
     """全形轉半形、去空白、轉小寫。跟 pipeline 的 norm 一樣。"""
@@ -279,8 +298,9 @@ def get_vector_id():
     env = os.environ.get("PENSIEVE_VECTOR_ID", "").strip()
     if env:
         return env
-    if os.path.exists(VECTOR_ID_FILE):
-        with open(VECTOR_ID_FILE, "r", encoding="utf-8") as f:
+    path = vector_id_file()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
             value = f.read().strip()
         if value:
             return value
@@ -331,7 +351,7 @@ def upload_cases(force=False, dry_run=False, log=print):
 
     vector_id = get_vector_id()
     if not vector_id:
-        log(f"知識庫：沒有設定 vector_id（VECTOR_ID / 環境變數 PENSIEVE_VECTOR_ID / {VECTOR_ID_FILE}），不上傳")
+        log(f"知識庫：沒有設定 vector_id（VECTOR_ID / 環境變數 PENSIEVE_VECTOR_ID / {vector_id_file()}），不上傳")
         return "skipped"
 
     with open(path, "rb") as f:

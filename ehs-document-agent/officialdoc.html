@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>公文摘要情況結果</title>
+    <style>
+        :root {
+            --bg-main: #f8fafc;
+            --panel-bg: #ffffff;
+            --text-title: #0f172a;
+            --text-main: #334155;
+            --text-muted: #64748b;
+            --border-light: #e2e8f0;
+            --tech-blue: #2563eb;
+            --tech-blue-bg: rgba(37, 99, 233, 0.06);
+            --tech-gray-bg: #f8fafc;
+            --tech-gray-border: #cbd5e1;
+            --success: #10b981;
+            --success-bg: rgba(16, 185, 129, 0.08);
+            --warning: #b45309;
+            --warning-bg: rgba(245, 158, 11, 0.10);
+            --warning-border: rgba(245, 158, 11, 0.30);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Microsoft JhengHei", monospace;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            line-height: 1.7;
+            margin: 0;
+            padding: 50px 20px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container { max-width: 1000px; margin: 0 auto; }
+
+        .header-section {
+            margin-bottom: 25px;
+            border-bottom: 1px solid var(--border-light);
+            padding-bottom: 20px;
+        }
+
+        .header-title h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-title);
+            margin: 0 0 6px 0;
+            letter-spacing: -0.3px;
+        }
+
+        .header-title p {
+            color: var(--text-muted);
+            margin: 0;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .count-summary-container {
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 14px;
+        }
+
+        .count-summary-text {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-title);
+        }
+
+        .count-number {
+            color: var(--tech-blue);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 22px;
+            margin: 0 4px;
+        }
+
+        .pending-note {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--warning);
+            background-color: var(--warning-bg);
+            border: 1px solid var(--warning-border);
+            border-radius: 999px;
+            padding: 3px 12px;
+        }
+
+        .search-container { position: relative; margin-bottom: 30px; }
+
+        .search-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            width: 18px;
+            height: 18px;
+            pointer-events: none;
+        }
+
+        .search-input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 12px 14px 12px 46px;
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
+            font-size: 14px;
+            background-color: var(--panel-bg);
+            color: var(--text-title);
+            outline: none;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .search-input:focus {
+            border-color: #94a3b8;
+            box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.04);
+        }
+
+        .section-divider {
+            display: flex;
+            align-items: center;
+            margin: 40px 0 24px 0;
+            color: var(--text-muted);
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .section-divider::after {
+            content: '';
+            flex: 1;
+            margin-left: 16px;
+            height: 1px;
+            background-color: var(--border-light);
+        }
+
+        .status-message {
+            padding: 40px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .summary-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-light);
+            border-radius: 10px;
+            padding: 26px;
+            margin-bottom: 22px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .summary-card:hover {
+            border-color: #cbd5e1;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.02);
+        }
+
+        .summary-card.is-read {
+            background-color: #fafafa;
+            opacity: 0.65;
+            box-shadow: none;
+            border-color: var(--border-light);
+        }
+        .summary-card.is-read:hover {
+            box-shadow: none;
+            border-color: var(--border-light);
+        }
+
+        .grid-row { display: flex; flex-direction: column; gap: 20px; }
+
+        .field-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-light);
+            padding-bottom: 14px;
+        }
+
+        .field-group { display: flex; flex-direction: column; gap: 6px; }
+
+        .field-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+        }
+
+        .field-value {
+            font-size: 14px;
+            color: var(--text-main);
+            margin: 0;
+            white-space: pre-line;
+        }
+
+        .field-value.title-highlight {
+            font-weight: 600;
+            color: var(--text-title);
+            font-size: 15px;
+        }
+
+        /* ── 指派 / 知會 ── */
+        .people-row {
+            display: flex;
+            gap: 28px;
+            flex-wrap: wrap;
+        }
+
+        .people-col {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            flex: 1 1 200px;
+            min-width: 0;
+        }
+
+        .person-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .person-chip {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-main);
+            background-color: var(--tech-gray-bg);
+            border: 1px solid var(--border-light);
+            border-radius: 999px;
+            padding: 3px 11px;
+            white-space: nowrap;
+        }
+
+        .person-chip.assignee {
+            background-color: var(--tech-blue-bg);
+            border-color: rgba(37, 99, 233, 0.18);
+            color: var(--tech-blue);
+        }
+
+        .person-chip.unknown {
+            background-color: var(--warning-bg);
+            border-color: var(--warning-border);
+            color: var(--warning);
+        }
+
+        .summary-card.is-read .person-chip {
+            background-color: #e2e8f0;
+            border-color: #e2e8f0;
+            color: #475569;
+        }
+
+        .comment-box-wrapper { position: relative; margin-top: 2px; }
+
+        .comment-box {
+            background-color: var(--tech-gray-bg);
+            padding: 14px 18px;
+            border-radius: 6px;
+            border: 1px solid var(--border-light);
+            border-left: 3px solid #475569;
+        }
+
+        .summary-card.is-read .comment-box {
+            background-color: #f1f5f9;
+            border-left-color: #94a3b8;
+        }
+
+        .comment-box .field-value {
+            color: #1e293b;
+            font-weight: 500;
+            padding-right: 80px;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 12px;
+            background-color: #ffffff;
+            border: 1px solid var(--border-light);
+            color: var(--text-muted);
+            padding: 5px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.15s ease;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+            z-index: 10;
+        }
+
+        .copy-btn:hover {
+            color: var(--text-title);
+            border-color: var(--tech-gray-border);
+            background-color: var(--tech-gray-bg);
+        }
+
+        .copy-btn svg { width: 13px; height: 13px; }
+
+        .badge {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            background-color: var(--tech-blue-bg);
+            color: var(--tech-blue);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .summary-card.is-read .badge {
+            background-color: #e2e8f0;
+            color: #475569;
+        }
+
+        .action-btn {
+            background-color: #ffffff;
+            border: 1px solid var(--tech-gray-border);
+            color: var(--text-main);
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.15s ease;
+        }
+
+        .action-btn:hover {
+            background-color: var(--tech-gray-bg);
+            color: var(--text-title);
+            border-color: #94a3b8;
+        }
+
+        .action-btn.checked {
+            background-color: var(--success-bg);
+            border-color: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+        .action-btn.checked:hover {
+            background-color: var(--success);
+            border-color: var(--success);
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <div class="header-section">
+        <div class="header-title">
+            <h1>公文摘要情況結果</h1>
+            <p>DATA AGENT INTEGRATED CONTROL PANEL</p>
+        </div>
+    </div>
+
+    <div class="count-summary-container">
+        <div class="count-summary-text">
+            目前共有<span id="pending-count" class="count-number">0</span>件公文待簽核
+        </div>
+        <span id="unknown-note" class="pending-note" style="display:none;"></span>
+    </div>
+
+    <div class="search-container">
+        <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input type="text" id="search-box" class="search-input" placeholder="鍵入來文字號、主旨或人員姓名進行過濾..." />
+    </div>
+
+    <div id="summary-container">
+        <div class="status-message">正在連結核心數據模組 (data/officialdoc.json)...</div>
+    </div>
+
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const container = document.getElementById("summary-container");
+        const pendingCountSpan = document.getElementById("pending-count");
+        const unknownNote = document.getElementById("unknown-note");
+        const searchBox = document.getElementById("search-box");
+
+        let allDocs = [];
+
+        // 資料來自 LLM，一律轉義後才放進 innerHTML
+        function escapeHtml(value) {
+            return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // "ABC、DEF" → ['ABC', 'DEF']；也接受逗號、分號分隔
+        function splitPeople(value) {
+            return String(value == null ? '' : value)
+                .split(/[、,，;；\/]/)
+                .map(s => s.trim())
+                .filter(Boolean);
+        }
+
+        function renderPeople(value, kind) {
+            const names = splitPeople(value);
+            if (names.length === 0) {
+                return `<span class="person-chip unknown">未提供</span>`;
+            }
+            return names.map(n => {
+                const isUnknown = (n === '待確認' || n === '未提供');
+                const cls = isUnknown ? 'unknown' : (kind === 'assignee' ? 'assignee' : '');
+                return `<span class="person-chip ${cls}">${escapeHtml(n)}</span>`;
+            }).join('');
+        }
+
+        async function loadOfficialDocs() {
+            const timestamp = Date.now();
+            try {
+                const res = await fetch(`data/officialdoc.json?t=${timestamp}`, { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP 錯誤！狀態碼: ${res.status}`);
+
+                let text = await res.text();
+                const scriptIndex = text.indexOf('<script>');
+                if (scriptIndex !== -1) text = text.slice(0, scriptIndex).trim();
+
+                const data = JSON.parse(text);
+
+                // ===== 萬用資料讀取：不管包在什麼 key 裡都能抓 =====
+                let rawDocs = [];
+                if (Array.isArray(data)) {
+                    rawDocs = data;
+                } else if (data && typeof data === 'object') {
+                    // 常見 key 先試，再自動找物件裡第一個陣列
+                    rawDocs = data.results || data.documents || data.data || data.list || data.items;
+                    if (!Array.isArray(rawDocs)) {
+                        rawDocs = Object.values(data).find(v => Array.isArray(v)) || [data];
+                    }
+                }
+                // =================================================
+
+                // _id 用索引，按鈕就不必把字號串進 onclick 的引號裡
+                allDocs = rawDocs.map((item, i) => ({ ...item, _id: i, isRead: false }));
+
+                if (allDocs.length > 0) {
+                    renderCards();
+                } else {
+                    pendingCountSpan.innerText = "0";
+                    container.innerHTML = `<div class="status-message">沒有找到任何公文紀錄。</div>`;
+                }
+            } catch (e) {
+                console.error("Data load failed:", e);
+                pendingCountSpan.innerText = "ERROR";
+                container.innerHTML = `<div class="status-message" style="color: #ef4444;">資料格式解析錯誤，請確認 JSON 是否為合規的陣列或物件。</div>`;
+            }
+        }
+
+        searchBox.addEventListener("input", renderCards);
+
+        function matchesKeyword(item, keyword) {
+            if (!keyword) return true;
+            const haystack = [
+                item.來文字號, item.主旨,
+                item.指派人員, item.知會人員
+            ].map(v => String(v == null ? '' : v).toLowerCase()).join(' ');
+            return haystack.includes(keyword);
+        }
+
+        function renderCards() {
+            container.innerHTML = "";
+            const keyword = searchBox.value.trim().toLowerCase();
+
+            let filteredDocs = allDocs.filter(item => matchesKeyword(item, keyword));
+
+            const unreadDocs = filteredDocs.filter(d => !d.isRead);
+            const readDocs = filteredDocs.filter(d => d.isRead);
+
+            pendingCountSpan.innerText = unreadDocs.length;
+
+            // 提醒有幾件的指派/知會需要人工確認
+            const needsAttention = unreadDocs.filter(d =>
+                splitPeople(d.指派人員).includes('待確認') ||
+                splitPeople(d.知會人員).includes('待確認') ||
+                !d.指派人員 || !d.知會人員
+            ).length;
+
+            if (needsAttention > 0) {
+                unknownNote.style.display = "";
+                unknownNote.innerText = `其中 ${needsAttention} 件的指派/知會待確認`;
+            } else {
+                unknownNote.style.display = "none";
+            }
+
+            if (filteredDocs.length === 0) {
+                container.innerHTML = `<div class="status-message">未找到符合條件的公文紀錄。</div>`;
+                return;
+            }
+
+            unreadDocs.forEach(item => createCardElement(item));
+
+            if (readDocs.length > 0) {
+                const divider = document.createElement("div");
+                divider.className = "section-divider";
+                divider.innerText = "ARCHIVED DOCUMENTS";
+                container.appendChild(divider);
+                readDocs.forEach(item => createCardElement(item));
+            }
+        }
+
+        function createCardElement(item) {
+            const card = document.createElement("div");
+            card.className = `summary-card ${item.isRead ? 'is-read' : ''}`;
+
+            card.innerHTML = `
+                <div class="grid-row">
+                    <div class="field-header-row">
+                        <div class="field-group">
+                            <span class="field-label">來文字號</span>
+                            <div><span class="badge">${escapeHtml(item.來文字號 || '無')}</span></div>
+                        </div>
+                        <div>
+                            <button class="action-btn ${item.isRead ? 'checked' : ''}" onclick="toggleReadStatus(${item._id})">
+                                ${item.isRead ? '✓ 已閱' : '標記已閱'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <span class="field-label">主旨</span>
+                        <p class="field-value title-highlight">${escapeHtml(item.主旨 || '無')}</p>
+                    </div>
+
+                    <div class="field-group">
+                        <span class="field-label">Summary (摘要)</span>
+                        <p class="field-value">${escapeHtml(item.summary || '無')}</p>
+                    </div>
+
+                    <div class="people-row">
+                        <div class="people-col">
+                            <span class="field-label">指派人員</span>
+                            <div class="person-list">${renderPeople(item.指派人員, 'assignee')}</div>
+                        </div>
+                        <div class="people-col">
+                            <span class="field-label">知會人員</span>
+                            <div class="person-list">${renderPeople(item.知會人員, 'notify')}</div>
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <span class="field-label">Comment (建議與後續追蹤)</span>
+                        <div class="comment-box-wrapper">
+                            <button class="copy-btn" onclick="copyComment(this)">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                                </svg>
+                                <span>複製</span>
+                            </button>
+                            <div class="comment-box">
+                                <p class="field-target-text field-value">${escapeHtml(item.comment || '無')}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.appendChild(card);
+        }
+
+        window.toggleReadStatus = function(docId) {
+            const doc = allDocs.find(item => item._id === docId);
+            if (doc) {
+                doc.isRead = !doc.isRead;
+                renderCards();
+            }
+        };
+
+        window.copyComment = function(btn) {
+            const wrapper = btn.closest('.comment-box-wrapper');
+            const targetTextElement = wrapper.querySelector('.field-target-text');
+
+            if (!targetTextElement) return;
+            const textToCopy = targetTextElement.innerText;
+
+            const showSuccessUI = () => {
+                const textSpan = btn.querySelector('span');
+                textSpan.innerText = "已複製";
+                btn.style.color = "var(--success)";
+                btn.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                btn.style.backgroundColor = "var(--success-bg)";
+
+                setTimeout(() => {
+                    textSpan.innerText = "複製";
+                    btn.style.color = "";
+                    btn.style.borderColor = "";
+                    btn.style.backgroundColor = "";
+                }, 1500);
+            };
+
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    showSuccessUI();
+                }).catch(err => {
+                    console.warn('新版 API 被瀏覽器拒絕，切換至備援機制。', err);
+                    fallbackCopy(textToCopy, showSuccessUI);
+                });
+            } else {
+                fallbackCopy(textToCopy, showSuccessUI);
+            }
+        };
+
+        function fallbackCopy(text, successCallback) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.top = "0";
+            textArea.style.left = "0";
+            textArea.style.width = "2em";
+            textArea.style.height = "2em";
+            textArea.style.padding = "0";
+            textArea.style.border = "none";
+            textArea.style.outline = "none";
+            textArea.style.boxShadow = "none";
+            textArea.style.background = "transparent";
+
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    successCallback();
+                } else {
+                    alert('複製失敗，請手動選取文字');
+                }
+            } catch (err) {
+                console.error('備援複製依舊失敗: ', err);
+            }
+
+            document.body.removeChild(textArea);
+        }
+
+        loadOfficialDocs();
+    });
+</script>
+
+</body>
+</html>

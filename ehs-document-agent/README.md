@@ -228,12 +228,17 @@ feedback_server.py（在 .67）──寫入──> \\10.10.51.67\data\officialdo
 1. **10.10.51.67**：裝 Python（只用標準函式庫，不用 pip 裝任何東西）。
 2. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 放進 `\\10.10.51.67\data\officialdoc\`。
 3. 在 .67 上執行 `start_feedback_server.bat`，開 `http://127.0.0.1:8765/health` 看到 `"ok": true`。
-4. 在 .67 開 8765 port 的防火牆（系統管理員 cmd，或請 IT 開）：
-   `netsh advfirewall firewall add rule name="officialdoc feedback" dir=in action=allow protocol=TCP localport=8765`
-   原因：網頁本身走 .67 既有的網站 port，回饋服務是另一個 port（8765），
-   同事的瀏覽器要連進來送回饋，Windows 防火牆預設會擋。
-5. 在 .67 的工作排程器加一個工作：觸發「電腦啟動時」，執行 `start_feedback_server.bat`，
-   勾「不論使用者是否登入都執行」。這樣 .67 重開機後服務會自己起來。
+4. **從你的電腦**打開 `http://10.10.51.67:8765/health`：
+   * 看得到 `"ok": true` → 沒被防火牆擋，完成。接著在 .67 的工作排程器加一個工作：
+     觸發「電腦啟動時」，執行 `start_feedback_server.bat`，勾「不論使用者是否登入都執行」。
+   * 打不開（被防火牆擋、又沒辦法開 port）→ 改成**在你自己的電腦**跑回饋服務：
+     關掉 .67 上的服務，在你電腦直接執行 `\\10.10.51.67\data\officialdoc\start_feedback_server.bat`
+     （回饋一樣寫進 `\\10.10.51.67\data\officialdoc`），再把它放進你電腦的「啟動」資料夾或工作排程器（登入時）。
+     網頁會先找 .67、找不到就自動改連你電腦的 `127.0.0.1:8765`，不用改任何設定。
+     限制：只有在你這台電腦上評分送得出去；你電腦沒開時，回饋會先暫存在瀏覽器，下次連上自動補送。
+     兩邊不要同時開。
+5. （可略）要讓同事也能評分、但 .67 又不能開 8765：請管 .67 網站的人把 `/feedback` 轉發到 `127.0.0.1:8765`
+   （走網站原本的 port，不用開新的），網頁的 `FEEDBACK_API_CANDIDATES` 再改成網站的位址。
 6. **你的電腦**：把 vector_id 存成單行文字檔 `D:\ASEKH\K20076\2026\公文簽核agent\vector_id.txt`。
 7. 更新網頁資料夾裡的 `officialdoc.html`，打開後右上角顯示「回饋服務：已連線」就是通了。
 8. Pensieve：

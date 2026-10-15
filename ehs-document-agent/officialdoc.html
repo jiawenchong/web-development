@@ -474,11 +474,19 @@
 
 <script>
     // ===== 回饋服務設定 =====
-    // feedback_server.py 跟這個網頁跑在同一台主機（10.10.51.67），所以直接用網頁的主機名稱 + 8765 port。
-    // 服務若改放別台，把這裡換成那台的位址；測試時可在網址後面加 ?fbapi=http://127.0.0.1:8765 臨時覆蓋。
-    const FEEDBACK_API = (new URLSearchParams(location.search).get('fbapi')
-                          || `http://${location.hostname || '127.0.0.1'}:8765`).replace(/\/+$/, '');
+    // 依序找回饋服務，第一個連得上的就用它：
+    //   1) 跟網頁同一台主機（10.10.51.67）的 8765 port
+    //   2) 自己這台電腦（127.0.0.1:8765）——.67 的 8765 被防火牆擋住時，在自己電腦跑 feedback_server.py 也能用
+    // 測試時可在網址後面加 ?fbapi=http://127.0.0.1:8765 指定只用某一個。
+    const FEEDBACK_API_CANDIDATES = (() => {
+        const forced = new URLSearchParams(location.search).get('fbapi');
+        const list = forced ? [forced]
+                            : [`http://${location.hostname || '127.0.0.1'}:8765`, 'http://127.0.0.1:8765'];
+        return [...new Set(list.map(u => u.replace(/\/+$/, '')))];
+    })();
+    let FEEDBACK_API = FEEDBACK_API_CANDIDATES[0];
     const FEEDBACK_TIMEOUT_MS = 5000;
+    const FEEDBACK_PROBE_TIMEOUT_MS = 2500;
     const QUEUE_KEY = 'officialdoc_feedback_queue';     // 送不出去的回饋先暫存在瀏覽器
 
     document.addEventListener("DOMContentLoaded", () => {
@@ -713,7 +721,25 @@
         }
 
         // 讀伺服器上「每篇最新一筆回饋」，評的是目前這則 comment 才顯示成已回饋
+        // 找出第一個連得上的回饋服務。都連不上就維持第一個，回饋會先暫存在瀏覽器
+        async function resolveFeedbackApi() {
+            for (const base of FEEDBACK_API_CANDIDATES) {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), FEEDBACK_PROBE_TIMEOUT_MS);
+                try {
+                    const res = await fetch(`${base}/health`, { cache: 'no-store', signal: ctrl.signal });
+                    if (res.ok) { FEEDBACK_API = base; return true; }
+                } catch (e) {
+                    /* 換下一個 */
+                } finally {
+                    clearTimeout(timer);
+                }
+            }
+            return false;
+        }
+
         async function syncFeedback() {
+            await resolveFeedbackApi();
             await flushQueue();
 
             let latest = {};

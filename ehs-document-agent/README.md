@@ -223,28 +223,23 @@ feedback_server.py（在 .67）──寫入──> \\10.10.51.67\data\officialdo
 | `officialdoc_feedback_cases.txt` | pipeline | 上傳到知識庫的案例卡 |
 | `.vector_upload_state.json` | pipeline | 上次上傳的內容指紋，用來判斷要不要重傳 |
 
-### 第一次設定
+### 第一次設定（.67 只有資料夾權限、回饋服務跑在你電腦的做法）
 
-1. **10.10.51.67**：裝 Python（只用標準函式庫，不用 pip 裝任何東西）。
-2. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 放進 `\\10.10.51.67\data\officialdoc\`。
-3. 在 .67 上執行 `start_feedback_server.bat`，開 `http://127.0.0.1:8765/health` 看到 `"ok": true`。
-4. **從你的電腦**打開 `http://10.10.51.67:8765/health`：
-   * 看得到 `"ok": true` → 沒被防火牆擋，完成。接著在 .67 的工作排程器加一個工作：
-     觸發「電腦啟動時」，執行 `start_feedback_server.bat`，勾「不論使用者是否登入都執行」。
-   * 打不開（被防火牆擋、又沒辦法開 port）→ 改成**在你自己的電腦**跑回饋服務：
-     關掉 .67 上的服務，在你電腦直接執行 `\\10.10.51.67\data\officialdoc\start_feedback_server.bat`
-     （回饋一樣寫進 `\\10.10.51.67\data\officialdoc`），再把它放進你電腦的「啟動」資料夾或工作排程器（登入時）。
-     網頁會先找 .67、找不到就自動改連你電腦的 `127.0.0.1:8765`，不用改任何設定。
-     限制：只有在你這台電腦上評分送得出去；你電腦沒開時，回饋會先暫存在瀏覽器，下次連上自動補送。
-     兩邊不要同時開。
-5. （可略）要讓同事也能評分、但 .67 又不能開 8765：請管 .67 網站的人把 `/feedback` 轉發到 `127.0.0.1:8765`
-   （走網站原本的 port，不用開新的），網頁的 `FEEDBACK_API_CANDIDATES` 再改成網站的位址。
-6. **你的電腦**：把 vector_id 存成單行文字檔 `D:\ASEKH\K20076\2026\公文簽核agent\vector_id.txt`。
-7. 更新網頁資料夾裡的 `officialdoc.html`，打開後右上角顯示「回饋服務：已連線」就是通了。
-8. Pensieve：
+1. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 複製到 `\\10.10.51.67\data\officialdoc\`。
+2. 你的電腦：換上新版 `officialdoc_pipeline.py`，把 vector_id 存成 `D:\ASEKH\K20076\2026\公文簽核agent\vector_id.txt`。
+3. 你的電腦：雙擊 `\\10.10.51.67\data\officialdoc\start_feedback_server.bat`，黑色視窗要一直開著（關掉＝服務停止）。
+   瀏覽器開 `http://127.0.0.1:8765/health`，看到 `"ok": true`，而且 `file` 是 `\\10.10.51.67\data\officialdoc\feedback.jsonl`。
+4. 開機自動啟動：`Win+R` → 輸入 `shell:startup` → 在打開的資料夾裡建立 `start_feedback_server.bat` 的捷徑
+   （捷徑內容 →「執行」選「最小化」，視窗就不會擋畫面）。
+5. 把新版 `officialdoc.html` 複製到網頁資料夾，打開網頁，右上角顯示「回饋服務：已連線」。
+   網頁會先找 `10.10.51.67:8765`，找不到就自動改連你電腦的 `127.0.0.1:8765`，不用改設定。
+6. Pensieve：
    * 把 `prompt/comment.txt`、`prompt/summary.txt` 貼進 flow 並**發布**。
    * 確認 **comment 那個 node 讀得到原始的 `input`**（不是只吃 summary node 的輸出），否則「參考回饋」傳不到它手上。
    * 開一個專用知識庫、設定成 replace，掛到 comment 那個 LLM node。
+
+限制：只有你這台電腦上的評分送得出去。之後要讓同事也能評，需要請管 .67 的人在 .67 上跑回饋服務並開 8765 port，
+或把網站的 `/feedback` 轉發到回饋服務。
 
 ### 驗證
 

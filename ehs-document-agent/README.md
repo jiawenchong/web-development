@@ -243,6 +243,9 @@ feedback_server.py（在 .67）──寫入──> \\10.10.51.67\d$\FAC_Web\agen
 
 ### 驗證
 
+所有指令都在**你的電腦**、`officialdoc_pipeline.py` 所在的資料夾執行（.67 只放檔案，不跑程式）。
+
+0. 先單獨測知識庫上傳：`python officialdoc_pipeline.py --upload-knowledge`，log 出現「知識庫：已上傳」、Pensieve 知識庫裡看得到 `officialdoc_feedback_cases.txt` 就成功。
 1. 你電腦執行 `python officialdoc_pipeline.py`，log 要看到「讀入 N 篇公文的使用者回饋」。
 2. 網頁上隨便評一篇 3 分並寫原因 → `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\feedback.jsonl` 多一行。
 3. 再跑一次 pipeline → log 出現「依回饋重產 1」與「知識庫：已上傳」，Pensieve 知識庫裡只有一份 `officialdoc_feedback_cases.txt`。

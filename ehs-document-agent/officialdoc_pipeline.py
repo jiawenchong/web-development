@@ -24,6 +24,7 @@
     python officialdoc_pipeline.py --skip-download      # 用現有的報表檔
     python officialdoc_pipeline.py --dry-run            # 不呼叫 API，只看抓到幾篇
     python officialdoc_pipeline.py --probe              # 只送一篇，把原始回應印出來
+    python officialdoc_pipeline.py --upload-knowledge   # 只把回饋案例上傳到 Pensieve 知識庫（測試用）
 """
 
 import argparse
@@ -899,6 +900,8 @@ def main():
     parser.add_argument("--probe-file", metavar="TXT",
                         help="送出這個檔案的原始文字（不做 json.dumps），"
                              "用來比對「網頁上貼的內容」與「API 送的內容」")
+    parser.add_argument("--upload-knowledge", action="store_true",
+                        help="只把回饋案例上傳到 Pensieve 知識庫（不管內容有沒有變都重傳），其他步驟都不跑")
     args = parser.parse_args()
 
     setup_logging()
@@ -910,6 +913,12 @@ def main():
         # --probe-file 完全不需要報表與 PDF，直接送檔案內容
         if args.probe_file:
             return probe(None, raw_file=args.probe_file)
+
+        if args.upload_knowledge:
+            if load_feedback_module() is None:
+                return 1
+            result = fk.upload_cases(force=True, log=log.info)
+            return 0 if result == "uploaded" else 1
 
         if not args.skip_download and not args.probe:
             step1_download()

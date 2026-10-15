@@ -128,7 +128,7 @@ REVIEW_CACHE = os.path.join(WORK_DIR, ".review_cache.json")
 #   prompt 住在 Pensieve flow 裡，這支程式看不到它變了。不 +1 的話，
 #   同一篇公文會直接命中舊快取，你會以為 prompt 沒生效。
 #   （臨時想重跑一次而不想動這裡，就加 --no-cache。）
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 # ── 使用者回饋（officialdoc.html 上的評分）──────────
 #   回饋由 feedback_server.py 寫進 knowledge\feedback.jsonl（路徑設定在 feedback_knowledge.py）。

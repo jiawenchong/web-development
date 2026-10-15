@@ -672,6 +672,7 @@
         function setServerStatus(online) {
             serverPill.className = `server-pill ${online ? 'online' : 'offline'}`;
             serverPill.innerText = online ? '回饋服務：已連線' : '回饋服務：未連線（回饋會先暫存在這台電腦）';
+            serverPill.title = online ? `連線位址：${FEEDBACK_API}` : `試過：${FEEDBACK_API_CANDIDATES.join('、')}`;
         }
 
         async function fetchWithTimeout(url, options = {}) {

@@ -136,7 +136,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):
-        pass      # 不留存取紀錄（裡面會有來源 IP）；需要的資訊下面自己記
+        # 預設的存取紀錄會帶來源 IP，這裡只記「哪個請求、回了什麼狀態」，查問題用
+        log.info("%s", fmt % args)
 
     # ── 路由 ──────────────────────────────────────
     def do_OPTIONS(self):

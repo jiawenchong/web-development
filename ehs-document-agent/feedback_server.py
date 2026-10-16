@@ -3,10 +3,10 @@
 公文網頁 + comment 回饋收集器——跑在 10.10.28.170
 
 一個服務做兩件事，大家打開 http://10.10.28.170:8765/ 就好：
-  * 提供網頁：web\\officialdoc.html 與 pipeline 產出的 web\\data\\officialdoc.json
-  * 收回饋：網頁上按「送出回饋」就 POST 到這裡，寫進 feedback\\feedback.jsonl
+  * 提供網頁：同資料夾的 officialdoc.html 與 pipeline 產出的 officialdoc.json
+  * 收回饋：網頁上按「送出回饋」就 POST 到這裡，寫進同資料夾的 feedback.jsonl
 
-  GET  /                  公文網頁（web\\officialdoc.html）
+  GET  /                  公文網頁（officialdoc.html）
   GET  /data/officialdoc.json   pipeline 的輸出
   POST /feedback          收一筆回饋（分數 1~5；低於 5 分必須有原因）
   GET  /feedback/latest   每篇公文最新一筆回饋（網頁用來顯示「已回饋」）
@@ -50,14 +50,15 @@ MAX_FIELD_CHARS = 4000         # 每個文字欄位最多存幾個字
 
 LOG_FILE = os.path.join(fk.KNOWLEDGE_DIR, "feedback_server.log")
 
-# 網頁檔案放這裡：web\officialdoc.html、web\data\officialdoc.json（pipeline 的 OUTPUT_JSON）
-WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+# 網頁檔案跟這支程式放同一個資料夾：officialdoc.html、officialdoc.json（pipeline 的 OUTPUT_JSON）
+WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 只提供這幾個網址對應的檔案，資料夾裡其他東西（程式、token、回饋檔）一律不給看
 WEB_FILES = {
     "": ("officialdoc.html", "text/html; charset=utf-8"),
     "/officialdoc.html": ("officialdoc.html", "text/html; charset=utf-8"),
-    "/data/officialdoc.json": (os.path.join("data", "officialdoc.json"), "application/json; charset=utf-8"),
+    # 網頁裡寫的是 data/officialdoc.json，這裡對應到同資料夾的 officialdoc.json
+    "/data/officialdoc.json": ("officialdoc.json", "application/json; charset=utf-8"),
 }
 
 # 只存這些欄位。不記評分人、時間、來源 IP

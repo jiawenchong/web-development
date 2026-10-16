@@ -184,89 +184,74 @@ API-key 版本上傳端點。
 
 ## Comment 回饋機制（讓 LLM 從使用者評分學習）
 
-程式與產出都在 **10.10.28.170**，不經過你的電腦。唯一從別處讀的是公文 PDF（還是原本 U: 共用資料夾）。
-大家打開 **http://10.10.28.170:8765/** 看公文、評分。
+程式與產出都在 **10.10.28.170**，不經過你的電腦。大家打開 **http://10.10.28.170:8765/** 看公文、評分。
 
 ### 10.10.28.170 資料夾結構
 
-根目錄是 `officialdoc_pipeline.py` 裡的 `BASE_DIR`（預設 `D:\officialdoc_agent`，那台沒有 D: 就只改那一行）。
+全部放在同一個資料夾 `D:\Web Service\official_doc`（`officialdoc_pipeline.py` 的 `BASE_DIR`）：
 
 ```
-D:\officialdoc_agent\                    ← 要先建立
-├─ officialdoc_pipeline.py              程式（從 repo 複製）
-├─ feedback_server.py                   程式：網頁 + 收回饋
-├─ feedback_knowledge.py                程式：整理回饋、上傳知識庫
-├─ start_feedback_server.bat            啟動網頁/回饋服務
-├─ download_report.py                   你的 Selenium 下載腳本（下載資料夾要改成這裡）
-├─ vector_id.txt                        知識庫 vector_id（單行）
-├─ pensieve_token.txt                   （選用）Flow Token
-├─ 環安衛收發文管理查詢報表_(Security B).xls   ← download_report.py 下載到這裡
-├─ pipeline.log / .review_cache.json / 未簽核的公文全文.json   （自動產生）
-├─ web\
-│   ├─ officialdoc.html                 網頁（從 repo 複製）
-│   └─ data\                            ← 要先建立
-│       └─ officialdoc.json             （pipeline 自動產生）
-└─ feedback\                            （自動建立）
-    ├─ feedback.jsonl                   所有回饋，一筆一行
-    ├─ feedback_digest.md               回饋彙整
-    ├─ officialdoc_feedback_cases.txt   上傳到知識庫的案例卡
-    └─ feedback_server.log
+D:\Web Service\official_doc\
+├─ officialdoc_pipeline.py          主程式（排程跑這支）
+├─ download_report.py               Selenium 下載腳本（下載資料夾要是這個資料夾）
+├─ feedback_server.py               網頁 + 收回饋服務
+├─ feedback_knowledge.py            整理回饋、上傳知識庫
+├─ start_feedback_server.bat        啟動網頁/回饋服務
+├─ officialdoc.html                 網頁
+├─ vector_id.txt                    知識庫 vector_id（單行）
+├─ pdf\scan\                        ← STEP 0 從 U:\...\● 公文掃瞄\新增資料夾 複製過來
+├─ pdf\download\                    ← STEP 0 從 U:\...\● 公文掃瞄\公文下載-自動化\解壓縮 複製過來
+│  （以下自動產生）
+├─ 環安衛收發文管理查詢報表_(Security B).xls
+├─ officialdoc.json                 pipeline 結果，網頁讀這個
+├─ feedback.jsonl                   所有回饋
+├─ feedback_digest.md / officialdoc_feedback_cases.txt / .vector_upload_state.json
+├─ pipeline.log / feedback_server.log / .review_cache.json / 未簽核的公文全文.json
 ```
 
-公文 PDF 不在這裡，pipeline 直接讀原本 U: 共用資料夾的「新增資料夾」與「公文下載-自動化\解壓縮」
-（`officialdoc_pipeline.py` 的 `PDF_ROOT`）。
-
-網頁服務只提供 `web\officialdoc.html` 與 `web\data\officialdoc.json`，資料夾裡其他檔案（程式、token、vector_id、回饋）
-用瀏覽器都拿不到。
+網頁服務只提供 `officialdoc.html` 與 `officialdoc.json`，資料夾裡其他檔案（程式、token、vector_id、回饋）用瀏覽器都拿不到。
 
 ### 資料怎麼流
 
 ```
-http://10.10.28.170:8765/ （每張卡片 comment 下方：1~5 星，低於 5 分必填原因，可選填「建議的 comment」）
-      │ POST /feedback
-      ▼
-feedback_server.py ──寫入──> feedback\feedback.jsonl
-      │
-      ▼ pipeline 下次排程跑時
-  ① prompt：每篇公文挑主旨最像的 ≤3 筆回饋，放在 input 的「參考回饋」欄位送給 flow
-  ② 快取裡被打低分的那篇，帶著修正意見自動重新產生一次
-  ③ 寫 web\data\officialdoc.json → 網頁更新
-  ④ 知識庫：所有回饋寫成案例卡，用 /api/uploadVector/ 上傳（replace；內容沒變就不重傳）
-  ⑤ 更新 feedback_digest.md 彙整檔
+STEP 0  U: 共用資料夾的新 PDF → 複製到 pdf\scan、pdf\download（PDF_SYNC_SOURCE_ROOT）
+STEP 1  download_report.py 下載環安衛報表
+STEP 2  比對報表與 PDF 全文
+STEP 3  每篇送 Pensieve；主旨相似的回饋放進「參考回饋」；被評低分的自動重產
+STEP 4  寫 officialdoc.json → 網頁更新
+之後    更新 feedback_digest.md、回饋有變就上傳知識庫（replace）
+
+網頁評分 → POST /feedback → feedback.jsonl → 下次 pipeline 讀到
 ```
 
 只存分數、原因、建議 comment 與當時的公文內容，不記評分人、時間、來源 IP。
 
 ### 第一次設定（在 10.10.28.170 上）
 
-1. 建資料夾：`D:\officialdoc_agent`、`D:\officialdoc_agent\web\data`。
-2. 裝套件：`pip install pandas pdfplumber requests xlrd lxml`；裝 Chrome 與對應版本的 driver（`download_report.py` 用）。
-3. 把程式、`officialdoc.html`、`vector_id.txt`、`download_report.py` 照上面的結構放好。
-4. 改 `download_report.py`：報表下載資料夾改成 `D:\officialdoc_agent`。
-   確認 .170 讀得到 U: 的公文 PDF：在 .170 的 cmd 打 `net use` 看 U: 對應的路徑，
-   把 `officialdoc_pipeline.py` 的 `PDF_ROOT` 改成那個 `\\伺服器\分享\...` 開頭的路徑（排程下才讀得到）。
-5. 開防火牆 8765 port（系統管理員 cmd）：
+1. **PDF 來源**：.170 沒有 U:，要用完整路徑。
+   * 在你的電腦 cmd 打 `net use`，找 U: 那一行，例如 `\\fs01\dept`。
+   * 在 .170 存那台伺服器的帳密（用之後跑排程的帳號登入 .170 做一次）：
+     `cmdkey /add:fs01 /user:fs01\administrator /pass`
+   * 在 .170 檔案總管打開 `\\fs01\dept\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄`，不跳密碼視窗就 OK。
+   * 填 `officialdoc_pipeline.py` 的 `PDF_SYNC_SOURCE_ROOT`（同一個路徑）。
+2. **download_report.py**：確認下載資料夾是 `D:\Web Service\official_doc`。
+3. **套件**：`pip install pandas pdfplumber requests xlrd lxml`；Chrome 與對應版本的 driver。
+4. **防火牆** 8765 port（系統管理員 cmd）：
    `netsh advfirewall firewall add rule name="officialdoc web" dir=in action=allow protocol=TCP localport=8765`
-6. 手動測試（在 `D:\officialdoc_agent` 執行）：
-   * `start_feedback_server.bat` → 從你的電腦打開 `http://10.10.28.170:8765/`，右上角「回饋服務：已連線」
-   * `python officialdoc_pipeline.py --dry-run` → 抓得到報表和 PDF
+5. **手動測試**（在 `D:\Web Service\official_doc` 執行）：
+   * `start_feedback_server.bat` → 從你的電腦打開 `http://10.10.28.170:8765/`
+   * `python officialdoc_pipeline.py --dry-run` → log 有「STEP 0 … 新複製 N 個」與「→ N 個 PDF」
    * `python officialdoc_pipeline.py --probe` → 連得到 Pensieve
-   * `python officialdoc_pipeline.py --upload-knowledge` → 知識庫上傳成功（有回饋之後）
    * `python officialdoc_pipeline.py` → 網頁出現公文
-7. 工作排程器設兩個工作，都選「不論使用者是否登入都執行」：
-   * **網頁/回饋服務**：觸發「電腦啟動時」，執行 `D:\officialdoc_agent\start_feedback_server.bat`，
-     開始位置 `D:\officialdoc_agent`；「設定」取消勾選「如果工作執行超過…停止」。
-   * **pipeline**：觸發照原本的時間，程式填 python 完整路徑（`where python`），引數 `officialdoc_pipeline.py`，
-     開始位置 `D:\officialdoc_agent`。
-   若出現「指定的登入工作階段不存在」，代表那台禁止儲存密碼，改選「只在使用者登入時執行」並保持登入。
-8. Pensieve：
-   * 把 `prompt/comment.txt`、`prompt/summary.txt` 貼進 flow 並**發布**。
-   * 確認 **comment 那個 node 讀得到原始的 `input`**，否則「參考回饋」傳不到它手上。
-   * 專用知識庫設定成 replace，掛到 comment 那個 LLM node。
+6. **工作排程器**兩個工作，開始位置都填 `D:\Web Service\official_doc`：
+   * 網頁/回饋服務：觸發「電腦啟動時」，執行 `start_feedback_server.bat`；「設定」取消勾選「如果工作執行超過…停止」。
+   * pipeline：照原本的時間，程式填 python 完整路徑（`where python`），引數 `officialdoc_pipeline.py`。
+   兩個都用**做第 1 步 cmdkey 的同一個帳號**執行，否則讀不到 U: 的 PDF。
+7. **Pensieve**：`prompt/comment.txt`、`prompt/summary.txt` 貼進 flow 並**發布**；comment node 讀得到原始 `input`；
+   專用知識庫設 replace、掛到 comment 那個 LLM node。
 
 ### 日常怎麼用
 
-* 什麼都不用開，兩個排程會自己跑；打開 `http://10.10.28.170:8765/` 看公文、評分即可。
-* 同一種錯一直出現（看 `feedback\feedback_digest.md`）→ 改 `comment.txt` 的規則，貼進 flow 發布，再把 pipeline 的 `PROMPT_VERSION` +1。
-  零星的個案修正不用改規則，靠「參考回饋」與知識庫自動帶入即可。
-* 偶爾看 `pipeline.log` 有沒有 `[WARNING]` / `[ERROR]`（知識庫上傳失敗不會讓 pipeline 停下來，只會留警告）。
+* 打開 `http://10.10.28.170:8765/` 看公文、評分即可。
+* 同一種錯一直出現（看 `feedback_digest.md`）→ 改 `comment.txt` 的規則，貼進 flow 發布，再把 pipeline 的 `PROMPT_VERSION` +1。
+* 偶爾看 `pipeline.log` 有沒有 `[WARNING]` / `[ERROR]`（PDF 同步失敗、知識庫上傳失敗都不會讓 pipeline 停下來，只會留記錄）。

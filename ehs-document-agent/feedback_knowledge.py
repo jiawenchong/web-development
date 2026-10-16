@@ -38,11 +38,11 @@ from datetime import datetime
 # 設定區
 # ═══════════════════════════════════════════════════════════
 
-# 回饋資料預設放在「這支程式所在資料夾」底下的 feedback\。
+# 回饋資料預設放在「這支程式所在的資料夾」。
 #   feedback_server.py 與 officialdoc_pipeline.py 都放在 10.10.28.170 的 BASE_DIR，
-#   所以兩邊自動指到同一個 BASE_DIR\feedback（pipeline 也會再用 set_knowledge_dir() 指定一次）。
+#   所以兩邊自動指到同一個資料夾（pipeline 也會再用 set_knowledge_dir() 指定一次）。
 # 底下所有檔案路徑都由 set_knowledge_dir() 統一算出來（檔案最下面會先套用一次預設值）。
-KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feedback")
+KNOWLEDGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 每篇公文最多帶幾筆參考回饋。帶太多會把 prompt 撐大，也容易讓 LLM 混淆
 MAX_EXAMPLES = 3

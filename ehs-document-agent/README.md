@@ -196,7 +196,8 @@ D:\Web Service\official_doc\
 ├─ download_report.py               Selenium 下載腳本（下載資料夾要是這個資料夾）
 ├─ feedback_server.py               網頁 + 收回饋服務
 ├─ feedback_knowledge.py            整理回饋、上傳知識庫
-├─ start_feedback_server.bat        啟動網頁/回饋服務
+├─ start_feedback_server.bat        在背景啟動網頁/回饋服務（雙擊一次，沒有視窗）
+├─ stop_feedback_server.bat         停止背景的網頁/回饋服務
 ├─ officialdoc.html                 網頁
 ├─ vector_id.txt                    知識庫 vector_id（單行）
 ├─ pdf\scan\                        ← STEP 0 從 U:\...\● 公文掃瞄\新增資料夾 複製過來

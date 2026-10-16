@@ -234,7 +234,12 @@ def main():
     args = parser.parse_args()
 
     setup_logging()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as e:
+        # 用 pythonw 在背景跑時沒有視窗，錯誤一定要寫進 log 才看得到
+        log.error("服務啟動失敗（port %d 已經有別的程式在用？服務已經開著了？）：%s", args.port, e)
+        return 1
     log.info("服務啟動 http://%s:%d ，網頁 %s ，回饋寫入 %s",
              args.host, args.port, WEB_DIR, fk.FEEDBACK_FILE)
     try:

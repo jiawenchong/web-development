@@ -7,13 +7,16 @@
   STEP 1  下載環安衛報表 (呼叫既有的 Selenium 腳本)
   STEP 2  讀 Excel + 掃 PDF → 組出「未簽核公文全文」
   STEP 3  POST 到 Pensieve flow_chat 取得 summary / 指派 / 知會 / comment
-  STEP 4  原子寫入網路磁碟的 officialdoc.json
+  STEP 4  原子寫入 web\data\officialdoc.json（feedback_server.py 直接提供這個網頁）
   STEP 5  發信（待補）
+
+全部跑在 10.10.28.170 上，所有檔案都在 BASE_DIR 底下（本機路徑），
+排程不需要任何網路磁碟或登入，詳見 README「10.10.28.170 資料夾結構」。
 
 設計原則（針對「手動 OK、RPA 有時候不行」）：
   * 完全不用剪貼簿——剪貼簿在 RPA / Session 0 下本來就不可靠
   * 不用 bare except；任何一步失敗都會 log 出原因並讓程式非 0 結束
-  * 網路路徑一律用 UNC，不用磁碟機代號（U: 在 RPA 帳號下可能根本沒掛載）
+  * 一律用本機路徑；真的要讀別台的檔案時用 UNC，不用磁碟機代號（排程帳號下可能沒掛載）
   * 寫檔一律 temp + os.replace（原子），不會出現寫到一半的 JSON
   * 讀下載檔前先等檔案大小穩定，避免讀到還在寫入的檔
   * 每篇公文各自 POST 一次，單篇失敗不會拖垮整批
@@ -48,7 +51,10 @@ import requests
 # 設定區（要改的東西都在這裡）
 # ═══════════════════════════════════════════════════════════
 
-WORK_DIR = r"D:\ASEKH\K20076\2026\公文簽核agent"
+# ★ 10.10.28.170 上的根目錄，所有東西都在這底下。那台沒有 D: 就只改這一行 ★
+BASE_DIR = r"D:\officialdoc_agent"
+
+WORK_DIR = BASE_DIR              # 程式、token、log、快取、下載的報表都放這裡
 
 # ── STEP 1：下載腳本 ───────────────────────────────
 RUN_DOWNLOAD = True
@@ -56,15 +62,16 @@ DOWNLOAD_SCRIPT = os.path.join(WORK_DIR, "download_report.py")   # ← 確認你
 DOWNLOAD_TIMEOUT = 600                                            # 秒
 
 # ── STEP 2：報表與 PDF ─────────────────────────────
+# download_report.py 要把報表下載到 WORK_DIR（Selenium 的 download.default_directory）
 REPORT_XLS = os.path.join(WORK_DIR, "環安衛收發文管理查詢報表_(Security B).xls")
 TARGET_STATUS = "FAC廠處長簽核"
 
-# ★ 一律用 UNC，不要用 U: 這種磁碟機代號 ★
-#   磁碟機對應是「每個登入 session 各自掛載」的，RPA 用另一個帳號 / 服務身分跑時
-#   U: 根本不存在，os.path.exists() 直接 False，PDF 就全部掃不到。
+# 公文 PDF 放這兩個資料夾（對應原本 U: 底下的「新增資料夾」與「公文下載-自動化\解壓縮」）。
+# ★ 如果 PDF 還是由別人 / 別的程式放在 U: 那個共用資料夾，這裡要改成那個共用資料夾的
+#   UNC 路徑（\\伺服器\分享\...），不要用 U:，排程帳號下沒有 U:。
 PDF_FOLDERS = [
-    r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄\新增資料夾",
-    r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄\公文下載-自動化\解壓縮",
+    os.path.join(BASE_DIR, "pdf", "scan"),
+    os.path.join(BASE_DIR, "pdf", "download"),
 ]
 
 FULLTEXT_JSON = os.path.join(WORK_DIR, "未簽核的公文全文.json")   # 中繼檔（除錯用）
@@ -130,8 +137,7 @@ REVIEW_CACHE = os.path.join(WORK_DIR, ".review_cache.json")
 PROMPT_VERSION = 3
 
 # ── 使用者回饋（officialdoc.html 上的評分）──────────
-#   feedback_server.py 跑在 10.10.51.67，把回饋寫進 FEEDBACK_DIR\feedback.jsonl。
-#   這支程式從 FEEDBACK_DIR 直接載入 feedback_knowledge.py，所以你電腦上不用再放一份。
+#   feedback_server.py 跟這支程式放同一個資料夾，把回饋寫進 FEEDBACK_DIR\feedback.jsonl。
 #   開啟後：
 #     * 每篇公文送出時，會帶上主旨最相近的幾筆回饋，放在 input 的「參考回饋」欄位
 #     * 快取裡的 comment 被打了低於 5 分 → 這篇會帶著那筆修正意見重新產生一次
@@ -139,7 +145,7 @@ PROMPT_VERSION = 3
 #   而且 comment 那個 node 必須讀得到原始的 input。
 USE_FEEDBACK = True
 FEEDBACK_FIELD = "參考回饋"
-FEEDBACK_DIR = r"\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc"
+FEEDBACK_DIR = os.path.join(BASE_DIR, "feedback")    # 必須跟 feedback_knowledge.py 的預設一致
 
 # 每次跑完把回饋整理成案例卡，覆蓋上傳到 Pensieve 知識庫。
 # 內容沒變就不重傳；上傳失敗只記警告，不影響公文審核結果。
@@ -147,14 +153,16 @@ USE_VECTOR_UPLOAD = True
 
 # ★ 知識庫的 vector_id 存成單行文字檔 vector_id.txt ★
 #   放在「officialdoc_pipeline.py 同一個資料夾」或 WORK_DIR 都可以，依序找第一個存在的。
-#   放你電腦、不放共用資料夾，別人就拿不到知識庫的寫入權限。
+#   不要放進 web\ 資料夾，那裡的東西別人用瀏覽器看得到。
 VECTOR_ID_FILES = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "vector_id.txt"),
     os.path.join(WORK_DIR, "vector_id.txt"),
 ]
 
 # ── STEP 4：最終輸出 ───────────────────────────────
-OUTPUT_JSON = r"\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc.json"
+# feedback_server.py 會把 web\officialdoc.html 和這個 JSON 當網頁提供：
+#   http://10.10.28.170:8765/
+OUTPUT_JSON = os.path.join(BASE_DIR, "web", "data", "officialdoc.json")
 
 LOG_FILE = os.path.join(WORK_DIR, "pipeline.log")
 
@@ -630,23 +638,24 @@ def merge(record, review):
     }
 
 
-fk = None     # feedback_knowledge 模組，由 load_feedback_module() 從 FEEDBACK_DIR 載入
+fk = None     # feedback_knowledge 模組，由 load_feedback_module() 載入
 
 
 def load_feedback_module():
-    """從 10.10.51.67 的共用資料夾載入 feedback_knowledge.py。讀不到就回傳 None，回饋功能這次停用。"""
+    """載入同資料夾的 feedback_knowledge.py，資料指到 FEEDBACK_DIR。失敗就回傳 None，回饋功能這次停用。"""
     global fk
     if fk is not None or not USE_FEEDBACK:
         return fk
-    if not os.path.isdir(FEEDBACK_DIR):
-        log.warning("回饋資料夾讀不到（權限？路徑打錯？），這次不使用回饋：%s", FEEDBACK_DIR)
+    try:
+        os.makedirs(FEEDBACK_DIR, exist_ok=True)
+    except OSError as e:
+        log.warning("回饋資料夾建立失敗，這次不使用回饋：%s（%s）", FEEDBACK_DIR, e)
         return None
-    if FEEDBACK_DIR not in sys.path:
-        sys.path.insert(0, FEEDBACK_DIR)
     try:
         import feedback_knowledge as module
     except ImportError as e:
-        log.warning("載入 feedback_knowledge.py 失敗，這次不使用回饋：%s", e)
+        log.warning("載入 feedback_knowledge.py 失敗（要跟這支程式放同一個資料夾），"
+                    "這次不使用回饋：%s", e)
         return None
     module.set_knowledge_dir(FEEDBACK_DIR)
     module.VECTOR_ID_FILE = find_vector_id_file()

@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-公文 comment 回饋收集器——跑在 K20076 這台電腦上
+公文網頁 + comment 回饋收集器——跑在 10.10.28.170
 
-officialdoc.html 是放在 \\\\10.10.51.67 的靜態網頁，瀏覽器沒辦法直接寫檔到
-你電腦的 D:\\。所以在你電腦上開一個很小的 HTTP 服務，網頁上按「送出回饋」
-就 POST 到這裡，這裡再寫進 knowledge\\feedback.jsonl。
+一個服務做兩件事，大家打開 http://10.10.28.170:8765/ 就好：
+  * 提供網頁：web\\officialdoc.html 與 pipeline 產出的 web\\data\\officialdoc.json
+  * 收回饋：網頁上按「送出回饋」就 POST 到這裡，寫進 feedback\\feedback.jsonl
 
+  GET  /                  公文網頁（web\\officialdoc.html）
+  GET  /data/officialdoc.json   pipeline 的輸出
   POST /feedback          收一筆回饋（分數 1~5；低於 5 分必須有原因）
   GET  /feedback/latest   每篇公文最新一筆回饋（網頁用來顯示「已回饋」）
   GET  /health            檢查服務是否活著
@@ -40,13 +42,23 @@ HOST = "0.0.0.0"          # 0.0.0.0 = 讓別台電腦也連得到；只給自己
 PORT = 8765
 
 # 允許哪個網頁來源呼叫。內網用 "*" 最省事；
-# 想鎖死就填網頁的來源，例如 "http://10.10.51.67"
+# 想鎖死就填網頁的來源，例如 "http://10.10.28.170:8765"
 ALLOWED_ORIGIN = "*"
 
 MAX_BODY_BYTES = 64 * 1024     # 單筆回饋的大小上限
 MAX_FIELD_CHARS = 4000         # 每個文字欄位最多存幾個字
 
 LOG_FILE = os.path.join(fk.KNOWLEDGE_DIR, "feedback_server.log")
+
+# 網頁檔案放這裡：web\officialdoc.html、web\data\officialdoc.json（pipeline 的 OUTPUT_JSON）
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+
+# 只提供這幾個網址對應的檔案，資料夾裡其他東西（程式、token、回饋檔）一律不給看
+WEB_FILES = {
+    "": ("officialdoc.html", "text/html; charset=utf-8"),
+    "/officialdoc.html": ("officialdoc.html", "text/html; charset=utf-8"),
+    "/data/officialdoc.json": (os.path.join("data", "officialdoc.json"), "application/json; charset=utf-8"),
+}
 
 # 只存這些欄位。不記評分人、時間、來源 IP
 TEXT_FIELDS = ("來文字號", "主旨", "summary", "指派人員", "知會人員", "comment",
@@ -135,6 +147,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _file(self, rel_path, content_type):
+        full = os.path.join(WEB_DIR, rel_path)
+        try:
+            with open(full, "rb") as f:
+                body = f.read()
+        except FileNotFoundError:
+            return self._json(404, {"ok": False, "error": f"找不到 {full}"})
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, fmt, *args):
         # 預設的存取紀錄會帶來源 IP，這裡只記「哪個請求、回了什麼狀態」，查問題用
         log.info("%s", fmt % args)
@@ -147,6 +173,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0].rstrip("/")
+
+        if path in WEB_FILES:
+            return self._file(*WEB_FILES[path])
 
         if path == "/health":
             return self._json(200, {"ok": True, "file": fk.FEEDBACK_FILE})
@@ -198,14 +227,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="公文 comment 回饋收集器")
+    parser = argparse.ArgumentParser(description="公文網頁 + comment 回饋收集器")
     parser.add_argument("--host", default=HOST)
     parser.add_argument("--port", type=int, default=PORT)
     args = parser.parse_args()
 
     setup_logging()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    log.info("回饋服務啟動 http://%s:%d ，寫入 %s", args.host, args.port, fk.FEEDBACK_FILE)
+    log.info("服務啟動 http://%s:%d ，網頁 %s ，回饋寫入 %s",
+             args.host, args.port, WEB_DIR, fk.FEEDBACK_FILE)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

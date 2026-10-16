@@ -38,11 +38,11 @@ from datetime import datetime
 # 設定區
 # ═══════════════════════════════════════════════════════════
 
-# 回饋資料預設放在「這支程式所在的資料夾」。
-#   feedback_server.py 在 10.10.51.67 上跑 → 存在那台的 \\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc
-#   officialdoc_pipeline.py 在你電腦跑 → 由它呼叫 set_knowledge_dir() 指到同一個資料夾
+# 回饋資料預設放在「這支程式所在資料夾」底下的 feedback\。
+#   feedback_server.py 與 officialdoc_pipeline.py 都放在 10.10.28.170 的 BASE_DIR，
+#   所以兩邊自動指到同一個 BASE_DIR\feedback（pipeline 也會再用 set_knowledge_dir() 指定一次）。
 # 底下所有檔案路徑都由 set_knowledge_dir() 統一算出來（檔案最下面會先套用一次預設值）。
-KNOWLEDGE_DIR = os.path.dirname(os.path.abspath(__file__))
+KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feedback")
 
 # 每篇公文最多帶幾筆參考回饋。帶太多會把 prompt 撐大，也容易讓 LLM 混淆
 MAX_EXAMPLES = 3
@@ -63,8 +63,7 @@ VECTOR_UPLOAD_URL = "https://pensieve.kh.asegroup.com/api/uploadVector/"
 # ★ 知識庫的 vector_id ★
 #   三個來源，由上到下找第一個有值的：這個變數 → 環境變數 PENSIEVE_VECTOR_ID → VECTOR_ID_FILE
 #   這個 id 等於知識庫的寫入權限，不要 commit 進 git。
-#   上傳是 pipeline 在你電腦做的，所以 pipeline 會把 VECTOR_ID_FILE 指到你電腦的 WORK_DIR，
-#   不放在 10.10.51.67 的共用資料夾（那裡別人也讀得到）。
+#   pipeline 會把 VECTOR_ID_FILE 指到它自己的資料夾（BASE_DIR\vector_id.txt）。
 VECTOR_ID = ""
 
 # 覆蓋 / 附加如果需要額外參數（例如 {"mode": "replace"}），填在這裡會一起送出

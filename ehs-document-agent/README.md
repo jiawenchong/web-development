@@ -184,78 +184,87 @@ API-key 版本上傳端點。
 
 ## Comment 回饋機制（讓 LLM 從使用者評分學習）
 
-### 放在哪裡
+整套都跑在 **10.10.28.170**，全部用本機路徑，不經過你的電腦、不需要網路磁碟。
+大家打開 **http://10.10.28.170:8765/** 看公文、評分。
 
-| 位置 | 放什麼 | 怎麼跑 |
-|---|---|---|
-| **你的電腦** `D:\ASEKH\K20076\2026\公文簽核agent\` | `officialdoc_pipeline.py`、`download_report.py`、`pensieve_token.txt`、**`vector_id.txt`** | 照原本的排程跑，不用改 |
-| **10.10.51.67** `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\` | `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat`；回饋資料也產生在這裡 | 回饋服務開機自動啟動，一直開著 |
-| **10.10.51.67** 網頁資料夾 | `officialdoc.html`、`data\officialdoc.json` | 跟原本一樣 |
+### 10.10.28.170 資料夾結構
 
-pipeline 會直接從 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc` 載入 `feedback_knowledge.py` 並讀寫那裡的回饋資料，
-你電腦上不用再放一份。資料夾讀不到時只記警告，公文審核照常跑（只是這次不帶回饋）。
+根目錄是 `officialdoc_pipeline.py` 裡的 `BASE_DIR`（預設 `D:\officialdoc_agent`，那台沒有 D: 就只改那一行）。
+
+```
+D:\officialdoc_agent\                    ← 要先建立
+├─ officialdoc_pipeline.py              程式（從 repo 複製）
+├─ feedback_server.py                   程式：網頁 + 收回饋
+├─ feedback_knowledge.py                程式：整理回饋、上傳知識庫
+├─ start_feedback_server.bat            啟動網頁/回饋服務
+├─ download_report.py                   你的 Selenium 下載腳本（下載資料夾要改成這裡）
+├─ vector_id.txt                        知識庫 vector_id（單行）
+├─ pensieve_token.txt                   （選用）Flow Token
+├─ 環安衛收發文管理查詢報表_(Security B).xls   ← download_report.py 下載到這裡
+├─ pipeline.log / .review_cache.json / 未簽核的公文全文.json   （自動產生）
+├─ pdf\
+│   ├─ scan\                            ← 要先建立：掃描的公文 PDF
+│   └─ download\                        ← 要先建立：自動下載解壓縮的公文 PDF
+├─ web\
+│   ├─ officialdoc.html                 網頁（從 repo 複製）
+│   └─ data\                            ← 要先建立
+│       └─ officialdoc.json             （pipeline 自動產生）
+└─ feedback\                            （自動建立）
+    ├─ feedback.jsonl                   所有回饋，一筆一行
+    ├─ feedback_digest.md               回饋彙整
+    ├─ officialdoc_feedback_cases.txt   上傳到知識庫的案例卡
+    └─ feedback_server.log
+```
+
+網頁服務只提供 `web\officialdoc.html` 與 `web\data\officialdoc.json`，資料夾裡其他檔案（程式、token、vector_id、回饋）
+用瀏覽器都拿不到。
 
 ### 資料怎麼流
 
 ```
-officialdoc.html（每張卡片 comment 下方：1~5 星，低於 5 分必填原因，可選填「建議的 comment」）
-      │ POST http://10.10.51.67:8765/feedback   （網頁自動用自己的主機名稱，不用填 IP）
+http://10.10.28.170:8765/ （每張卡片 comment 下方：1~5 星，低於 5 分必填原因，可選填「建議的 comment」）
+      │ POST /feedback
       ▼
-feedback_server.py（在 .67）──寫入──> \\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\feedback.jsonl
+feedback_server.py ──寫入──> feedback\feedback.jsonl
       │
-      ▼ 你電腦的 pipeline 下次排程跑時
+      ▼ pipeline 下次排程跑時
   ① prompt：每篇公文挑主旨最像的 ≤3 筆回饋，放在 input 的「參考回饋」欄位送給 flow
   ② 快取裡被打低分的那篇，帶著修正意見自動重新產生一次
-  ③ 知識庫：所有回饋寫成案例卡 officialdoc_feedback_cases.txt，用 /api/uploadVector/ 上傳
-     （知識庫設定成 replace，同檔名＝覆蓋；內容沒變就不重傳）
-  ④ 更新 feedback_digest.md 彙整檔，給人看、用來改 prompt 規則
+  ③ 寫 web\data\officialdoc.json → 網頁更新
+  ④ 知識庫：所有回饋寫成案例卡，用 /api/uploadVector/ 上傳（replace；內容沒變就不重傳）
+  ⑤ 更新 feedback_digest.md 彙整檔
 ```
 
 只存分數、原因、建議 comment 與當時的公文內容，不記評分人、時間、來源 IP。
 
-### \\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc 裡會出現的檔案
+### 第一次設定（在 10.10.28.170 上）
 
-| 檔案 | 誰寫的 | 內容 |
-|---|---|---|
-| `feedback.jsonl` | 回饋服務 | 所有回饋，一筆一行。評錯了可以直接用記事本刪掉那一行 |
-| `feedback_server.log` | 回饋服務 | 服務的執行紀錄 |
-| `feedback_digest.md` | pipeline | 回饋彙整，給人看 |
-| `officialdoc_feedback_cases.txt` | pipeline | 上傳到知識庫的案例卡 |
-| `.vector_upload_state.json` | pipeline | 上次上傳的內容指紋，用來判斷要不要重傳 |
-
-### 第一次設定（.67 只有資料夾權限、回饋服務跑在你電腦的做法）
-
-1. 把 `feedback_server.py`、`feedback_knowledge.py`、`start_feedback_server.bat` 複製到 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\`。
-2. 你的電腦：換上新版 `officialdoc_pipeline.py`，把 vector_id 存成 `D:\ASEKH\K20076\2026\公文簽核agent\vector_id.txt`。
-3. 你的電腦：雙擊 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\start_feedback_server.bat`，黑色視窗要一直開著（關掉＝服務停止）。
-   瀏覽器開 `http://127.0.0.1:8765/health`，看到 `"ok": true`，而且 `file` 是 `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\feedback.jsonl`。
-4. 開機自動啟動：把 `launch_feedback_server.bat` 放在**你電腦本機**（例如 `D:\ASEKH\K20076\2026\公文簽核agent\`），
-   `Win+R` → `shell:startup` → 建立它的捷徑（捷徑內容 →「執行」選「最小化」）。
-   它會一直等到 .67 連得上才啟動回饋服務；連不上時會自動打開 .67 的資料夾跳出登入視窗，輸入一次密碼即可。
-   （公司政策禁止電腦儲存網路密碼，`cmdkey` 會出現「無法從這個登入工作階段儲存認證」。
-   要完全免輸入密碼，請 IT 把該資料夾的讀寫權限開給你的網域帳號。）
-5. 把新版 `officialdoc.html` 複製到網頁資料夾，打開網頁，右上角顯示「回饋服務：已連線」。
-   網頁會先找 `10.10.51.67:8765`，找不到就自動改連你電腦的 `127.0.0.1:8765`，不用改設定。
-6. Pensieve：
+1. 建資料夾：`D:\officialdoc_agent`、`D:\officialdoc_agent\pdf\scan`、`D:\officialdoc_agent\pdf\download`、`D:\officialdoc_agent\web\data`。
+2. 裝套件：`pip install pandas pdfplumber requests xlrd lxml`；裝 Chrome 與對應版本的 driver（`download_report.py` 用）。
+3. 把程式、`officialdoc.html`、`vector_id.txt`、`download_report.py` 照上面的結構放好。
+4. 改 `download_report.py`：報表下載資料夾改成 `D:\officialdoc_agent`。
+5. 開防火牆 8765 port（系統管理員 cmd）：
+   `netsh advfirewall firewall add rule name="officialdoc web" dir=in action=allow protocol=TCP localport=8765`
+6. 手動測試（在 `D:\officialdoc_agent` 執行）：
+   * `start_feedback_server.bat` → 從你的電腦打開 `http://10.10.28.170:8765/`，右上角「回饋服務：已連線」
+   * `python officialdoc_pipeline.py --dry-run` → 抓得到報表和 PDF
+   * `python officialdoc_pipeline.py --probe` → 連得到 Pensieve
+   * `python officialdoc_pipeline.py --upload-knowledge` → 知識庫上傳成功（有回饋之後）
+   * `python officialdoc_pipeline.py` → 網頁出現公文
+7. 工作排程器設兩個工作，都選「不論使用者是否登入都執行」：
+   * **網頁/回饋服務**：觸發「電腦啟動時」，執行 `D:\officialdoc_agent\start_feedback_server.bat`，
+     開始位置 `D:\officialdoc_agent`；「設定」取消勾選「如果工作執行超過…停止」。
+   * **pipeline**：觸發照原本的時間，程式填 python 完整路徑（`where python`），引數 `officialdoc_pipeline.py`，
+     開始位置 `D:\officialdoc_agent`。
+   若出現「指定的登入工作階段不存在」，代表那台禁止儲存密碼，改選「只在使用者登入時執行」並保持登入。
+8. Pensieve：
    * 把 `prompt/comment.txt`、`prompt/summary.txt` 貼進 flow 並**發布**。
-   * 確認 **comment 那個 node 讀得到原始的 `input`**（不是只吃 summary node 的輸出），否則「參考回饋」傳不到它手上。
-   * 開一個專用知識庫、設定成 replace，掛到 comment 那個 LLM node。
-
-限制：只有你這台電腦上的評分送得出去。之後要讓同事也能評，需要請管 .67 的人在 .67 上跑回饋服務並開 8765 port，
-或把網站的 `/feedback` 轉發到回饋服務。
-
-### 驗證
-
-所有指令都在**你的電腦**、`officialdoc_pipeline.py` 所在的資料夾執行（.67 只放檔案，不跑程式）。
-
-0. 先單獨測知識庫上傳：`python officialdoc_pipeline.py --upload-knowledge`，log 出現「知識庫：已上傳」、Pensieve 知識庫裡看得到 `officialdoc_feedback_cases.txt` 就成功。
-1. 你電腦執行 `python officialdoc_pipeline.py`，log 要看到「讀入 N 篇公文的使用者回饋」。
-2. 網頁上隨便評一篇 3 分並寫原因 → `\\10.10.51.67\d$\FAC_Web\agent_platform\html_files\data\officialdoc\feedback.jsonl` 多一行。
-3. 再跑一次 pipeline → log 出現「依回饋重產 1」與「知識庫：已上傳」，Pensieve 知識庫裡只有一份 `officialdoc_feedback_cases.txt`。
+   * 確認 **comment 那個 node 讀得到原始的 `input`**，否則「參考回饋」傳不到它手上。
+   * 專用知識庫設定成 replace，掛到 comment 那個 LLM node。
 
 ### 日常怎麼用
 
-* 同一種錯一直出現（看 `feedback_digest.md`）→ 改 `comment.txt` 的規則，貼進 flow 發布，再把 pipeline 的 `PROMPT_VERSION` +1。
+* 什麼都不用開，兩個排程會自己跑；打開 `http://10.10.28.170:8765/` 看公文、評分即可。
+* 同一種錯一直出現（看 `feedback\feedback_digest.md`）→ 改 `comment.txt` 的規則，貼進 flow 發布，再把 pipeline 的 `PROMPT_VERSION` +1。
   零星的個案修正不用改規則，靠「參考回饋」與知識庫自動帶入即可。
-* ⚠️ 這個資料夾就是網頁的 `data` 資料夾，裡面的檔案用瀏覽器也打得開（例如 `/data/officialdoc/feedback.jsonl`）。
-  回饋內容被看到問題不大，但 **vector_id 一定要放你電腦**，不要放這裡。
+* 偶爾看 `pipeline.log` 有沒有 `[WARNING]` / `[ERROR]`（知識庫上傳失敗不會讓 pipeline 停下來，只會留警告）。

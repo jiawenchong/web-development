@@ -4,7 +4,6 @@
 
 把原本 4 支腳本 + RPA + 剪貼簿 合併成一支：
 
-  STEP 0  把 U: 共用資料夾裡的新公文 PDF 複製到這台的 pdf\scan、pdf\download
   STEP 1  下載環安衛報表 (呼叫既有的 Selenium 腳本)
   STEP 2  讀 Excel + 掃 PDF → 組出「未簽核公文全文」
   STEP 3  POST 到 Pensieve flow_chat 取得 summary / 指派 / 知會 / comment
@@ -37,7 +36,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -68,22 +66,10 @@ DOWNLOAD_TIMEOUT = 600                                            # 秒
 REPORT_XLS = os.path.join(WORK_DIR, "環安衛收發文管理查詢報表_(Security B).xls")
 TARGET_STATUS = "FAC廠處長簽核"
 
-# pipeline 讀這台本機的兩個資料夾；PDF 由 STEP 0 從 U: 共用資料夾複製過來
+# 公文 PDF：由你的電腦執行 sync_pdfs_to_170.py，從 U: 複製到這兩個資料夾，pipeline 只負責讀
 PDF_FOLDERS = [
     os.path.join(BASE_DIR, "pdf", "scan"),       # ← U:\...\● 公文掃瞄\新增資料夾
     os.path.join(BASE_DIR, "pdf", "download"),   # ← U:\...\● 公文掃瞄\公文下載-自動化\解壓縮
-]
-
-# ── STEP 0：從 U: 共用資料夾複製 PDF ───────────────
-# ★ 填 U: 對應的完整路徑（不能用 U:，這台沒有 U:）★
-#   查法：在「你的電腦」cmd 打 net use，U: 那一行後面的 \\伺服器\分享 換掉下面的開頭。
-#   這台要先存好那台伺服器的帳密（cmdkey，見 README），否則會讀不到。
-#   留空 = 不同步，直接用 pdf\scan、pdf\download 裡現有的檔案。
-PDF_SYNC_SOURCE_ROOT = r""   # 例：r"\\fs01\dept\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄"
-PDF_SYNC = [
-    # (相對於 PDF_SYNC_SOURCE_ROOT 的來源資料夾, 複製到這台的資料夾)
-    ("新增資料夾", PDF_FOLDERS[0]),
-    (os.path.join("公文下載-自動化", "解壓縮"), PDF_FOLDERS[1]),
 ]
 
 FULLTEXT_JSON = os.path.join(WORK_DIR, "未簽核的公文全文.json")   # 中繼檔（除錯用）
@@ -254,42 +240,6 @@ def clean_doc_text(text):
 # ═══════════════════════════════════════════════════════════
 # STEP 1  下載報表
 # ═══════════════════════════════════════════════════════════
-
-def step0_sync_pdfs():
-    """把 U: 共用資料夾裡新的 / 有更新的 PDF 複製到這台。失敗只記 log，沿用已經複製過來的檔案。"""
-    if not PDF_SYNC_SOURCE_ROOT.strip():
-        log.info("STEP 0 沒有設定 PDF_SYNC_SOURCE_ROOT，略過同步，直接用 %s",
-                 "、".join(dst for _, dst in PDF_SYNC))
-        return
-
-    for rel, dst in PDF_SYNC:
-        src = os.path.join(PDF_SYNC_SOURCE_ROOT, rel)
-        if not os.path.isdir(src):
-            log.error("STEP 0 PDF 來源讀不到（帳密沒存？路徑打錯？）：%s", src)
-            continue
-        os.makedirs(dst, exist_ok=True)
-
-        copied = skipped = 0
-        for name in os.listdir(src):
-            if not name.lower().endswith(".pdf"):
-                continue
-            s_path, d_path = os.path.join(src, name), os.path.join(dst, name)
-            try:
-                st = os.stat(s_path)
-                if os.path.exists(d_path):
-                    dt = os.stat(d_path)
-                    if dt.st_size == st.st_size and dt.st_mtime >= st.st_mtime:
-                        skipped += 1
-                        continue
-                tmp = d_path + ".tmp"          # 先複製成暫存檔，避免 STEP 2 讀到一半的 PDF
-                shutil.copy2(s_path, tmp)
-                os.replace(tmp, d_path)
-                copied += 1
-            except OSError as e:
-                log.warning("STEP 0 複製失敗 %s：%s: %s", name, type(e).__name__, e)
-
-        log.info("STEP 0 %s → %s：新複製 %d 個，已是最新 %d 個", src, dst, copied, skipped)
-
 
 def step1_download():
     if not RUN_DOWNLOAD:
@@ -1000,7 +950,6 @@ def main():
         if not args.skip_download and not args.probe:
             step1_download()
 
-        step0_sync_pdfs()
         records = step2_build_fulltext()
         if not records:
             log.warning("沒有待簽核公文，不覆蓋線上檔案，正常結束。")

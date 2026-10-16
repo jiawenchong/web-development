@@ -200,8 +200,8 @@ D:\Web Service\official_doc\
 ├─ stop_feedback_server.bat         停止背景的網頁/回饋服務
 ├─ officialdoc.html                 網頁
 ├─ vector_id.txt                    知識庫 vector_id（單行）
-├─ pdf\scan\                        ← STEP 0 從 U:\...\● 公文掃瞄\新增資料夾 複製過來
-├─ pdf\download\                    ← STEP 0 從 U:\...\● 公文掃瞄\公文下載-自動化\解壓縮 複製過來
+├─ pdf\scan\                        ← 你的電腦用 sync_pdfs_to_170.py 從 U:\...\● 公文掃瞄\新增資料夾 複製過來
+├─ pdf\download\                    ← 你的電腦用 sync_pdfs_to_170.py 從 U:\...\● 公文掃瞄\公文下載-自動化\解壓縮 複製過來
 │  （以下自動產生）
 ├─ 環安衛收發文管理查詢報表_(Security B).xls
 ├─ officialdoc.json                 pipeline 結果，網頁讀這個
@@ -215,7 +215,7 @@ D:\Web Service\official_doc\
 ### 資料怎麼流
 
 ```
-STEP 0  U: 共用資料夾的新 PDF → 複製到 pdf\scan、pdf\download（PDF_SYNC_SOURCE_ROOT）
+（你的電腦）sync_pdfs_to_170.py：U: 的新 PDF → .170 的 pdf\scan、pdf\download
 STEP 1  download_report.py 下載環安衛報表
 STEP 2  比對報表與 PDF 全文
 STEP 3  每篇送 Pensieve；主旨相似的回饋放進「參考回饋」；被評低分的自動重產
@@ -229,30 +229,22 @@ STEP 4  寫 officialdoc.json → 網頁更新
 
 ### 第一次設定（在 10.10.28.170 上）
 
-1. **PDF 來源**（兩種擇一）：
-   * **A. 你的電腦推過去（.170 讀不到 U: 時用這個）**：在你的電腦放 `sync_pdfs_to_170.py`，
-     在程式最上面填 `REMOTE_USER` / `REMOTE_PASSWORD`（填了密碼的檔案不要 commit），
-     再 `python sync_pdfs_to_170.py --dry-run` → `python sync_pdfs_to_170.py`。
-     你的電腦工作排程設「只在使用者登入時執行」，時間比 .170 的 pipeline 早；`PDF_SYNC_SOURCE_ROOT` 保持空的。
-   * **B. .170 自己去 U: 拉**：.170 要先能存取 U: 那台伺服器，步驟如下。
-   * 在你的電腦 cmd 打 `net use`，找 U: 那一行，例如 `\\fs01\dept`。
-   * 在 .170 存那台伺服器的帳密（用之後跑排程的帳號登入 .170 做一次）：
-     `cmdkey /add:fs01 /user:fs01\administrator /pass`
-   * 在 .170 檔案總管打開 `\\fs01\dept\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄`，不跳密碼視窗就 OK。
-   * 填 `officialdoc_pipeline.py` 的 `PDF_SYNC_SOURCE_ROOT`（同一個路徑）。
+1. **PDF 來源**：.170 讀不到 U:，由**你的電腦**把 PDF 推過去。
+   在你的電腦放 `sync_pdfs_to_170.py`，在程式最上面填 `REMOTE_USER` / `REMOTE_PASSWORD`（填了密碼的檔案不要 commit），
+   再 `python sync_pdfs_to_170.py --dry-run` → `python sync_pdfs_to_170.py`。
+   你的電腦工作排程設「只在使用者登入時執行」，時間比 .170 的 pipeline 早。
 2. **download_report.py**：確認下載資料夾是 `D:\Web Service\official_doc`。
 3. **套件**：`pip install pandas pdfplumber requests xlrd lxml`；Chrome 與對應版本的 driver。
 4. **防火牆** 8765 port（系統管理員 cmd）：
    `netsh advfirewall firewall add rule name="officialdoc web" dir=in action=allow protocol=TCP localport=8765`
 5. **手動測試**（在 `D:\Web Service\official_doc` 執行）：
    * `start_feedback_server.bat` → 從你的電腦打開 `http://10.10.28.170:8765/`
-   * `python officialdoc_pipeline.py --dry-run` → log 有「STEP 0 … 新複製 N 個」與「→ N 個 PDF」
+   * `python officialdoc_pipeline.py --dry-run` → log 有「pdf\scan → N 個 PDF」「pdf\download → N 個 PDF」
    * `python officialdoc_pipeline.py --probe` → 連得到 Pensieve
    * `python officialdoc_pipeline.py` → 網頁出現公文
 6. **工作排程器**兩個工作，開始位置都填 `D:\Web Service\official_doc`：
    * 網頁/回饋服務：觸發「電腦啟動時」，執行 `start_feedback_server.bat`；「設定」取消勾選「如果工作執行超過…停止」。
    * pipeline：照原本的時間，程式填 python 完整路徑（`where python`），引數 `officialdoc_pipeline.py`。
-   兩個都用**做第 1 步 cmdkey 的同一個帳號**執行，否則讀不到 U: 的 PDF。
 7. **Pensieve**：`prompt/comment.txt`、`prompt/summary.txt` 貼進 flow 並**發布**；comment node 讀得到原始 `input`；
    專用知識庫設 replace、掛到 comment 那個 LLM node。
 
@@ -260,4 +252,4 @@ STEP 4  寫 officialdoc.json → 網頁更新
 
 * 打開 `http://10.10.28.170:8765/` 看公文、評分即可。
 * 同一種錯一直出現（看 `feedback_digest.md`）→ 改 `comment.txt` 的規則，貼進 flow 發布，再把 pipeline 的 `PROMPT_VERSION` +1。
-* 偶爾看 `pipeline.log` 有沒有 `[WARNING]` / `[ERROR]`（PDF 同步失敗、知識庫上傳失敗都不會讓 pipeline 停下來，只會留記錄）。
+* 偶爾看 .170 的 `pipeline.log` 和你電腦的 `sync_pdfs.log` 有沒有 `[WARNING]` / `[ERROR]`（知識庫上傳失敗不會讓 pipeline 停下來，只會留記錄）。

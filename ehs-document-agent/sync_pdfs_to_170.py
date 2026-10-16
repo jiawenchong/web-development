@@ -5,22 +5,17 @@
 10.10.28.170 沒有 U: 的權限，所以由你的電腦（讀得到 U:）把新的 / 有更新的 PDF
 直接複製到 .170 的 pdf\\scan、pdf\\download，170 上的 pipeline 再去讀那兩個資料夾。
 
-.170 的帳密不寫在程式裡：
-  第一次執行  python sync_pdfs_to_170.py --save-password
-  輸入一次密碼，用 Windows DPAPI 加密存成 sync_pdfs_password.bin。
-  這個檔案只有「你的 Windows 帳號、在這台電腦上」才解得開，被複製到別台也沒用。
-  改密碼後再執行一次 --save-password 即可。
+.170 的帳號密碼直接填在下面設定區的 REMOTE_USER / REMOTE_PASSWORD。
+  ⚠ 填了密碼的這份檔案不要 commit / push 到 git，也不要放到共用資料夾。
 
 執行：
     python sync_pdfs_to_170.py                  # 同步
     python sync_pdfs_to_170.py --dry-run        # 只列出會複製哪些檔案
-    python sync_pdfs_to_170.py --save-password  # 存 / 更新 .170 的密碼
 
 排程：工作排程器設「只在使用者登入時執行」（要有 U:），時間比 .170 的 pipeline 早。
 """
 
 import argparse
-import getpass
 import logging
 import os
 import shutil
@@ -45,11 +40,12 @@ SYNC_PAIRS = [
     (os.path.join("公文下載-自動化", "解壓縮"), "download"),
 ]
 
-# ★ .170 的帳號 ★  本機帳號要寫成「IP\帳號」，例如 10.10.28.170\administrator
+# ★ .170 的帳號密碼 ★  本機帳號要寫成「IP\帳號」，例如 10.10.28.170\administrator
+#   ⚠ 填了密碼之後，這個檔案不要 commit / push 到 git
 REMOTE_USER = r"10.10.28.170\administrator"
+REMOTE_PASSWORD = r""            # ← 把 .170 的密碼填在引號中間
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PASSWORD_FILE = os.path.join(HERE, "sync_pdfs_password.bin")   # DPAPI 加密後的密碼
 LOG_FILE = os.path.join(HERE, "sync_pdfs.log")
 
 
@@ -70,63 +66,6 @@ def setup_logging():
         log.addHandler(sh)
 
 
-# ── Windows DPAPI：用目前登入的 Windows 帳號加密 / 解密 ─────────────
-
-def _dpapi(data, encrypt):
-    import ctypes
-    from ctypes import wintypes
-
-    class DATA_BLOB(ctypes.Structure):
-        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
-    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
-    kernel32.LocalFree.restype = ctypes.c_void_p
-
-    func = crypt32.CryptProtectData if encrypt else crypt32.CryptUnprotectData
-    func.argtypes = [ctypes.POINTER(DATA_BLOB),
-                     wintypes.LPCWSTR if encrypt else ctypes.c_void_p,
-                     ctypes.POINTER(DATA_BLOB), ctypes.c_void_p, ctypes.c_void_p,
-                     wintypes.DWORD, ctypes.POINTER(DATA_BLOB)]
-    func.restype = wintypes.BOOL
-
-    buf = ctypes.create_string_buffer(data, len(data))
-    blob_in = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-    blob_out = DATA_BLOB()
-    CRYPTPROTECT_UI_FORBIDDEN = 0x1
-    desc = "officialdoc sync" if encrypt else None
-
-    if not func(ctypes.byref(blob_in), desc, None, None, None,
-                CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out)):
-        raise ctypes.WinError()
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        kernel32.LocalFree(ctypes.cast(blob_out.pbData, ctypes.c_void_p))
-
-
-def save_password():
-    pw = getpass.getpass(f"{REMOTE_USER} 的密碼（輸入時不會顯示）：")
-    if not pw:
-        print("沒有輸入密碼，取消。")
-        return 1
-    with open(PASSWORD_FILE, "wb") as f:
-        f.write(_dpapi(pw.encode("utf-8"), encrypt=True))
-    print(f"已加密存到 {PASSWORD_FILE}（只有你的帳號在這台電腦上解得開）")
-    return 0
-
-
-def load_password():
-    env = os.environ.get("SYNC_170_PASSWORD")
-    if env:
-        return env
-    if not os.path.exists(PASSWORD_FILE):
-        return None
-    with open(PASSWORD_FILE, "rb") as f:
-        return _dpapi(f.read(), encrypt=False).decode("utf-8")
-
-
 # ── 連線與複製 ─────────────────────────────────────
 
 def ensure_remote():
@@ -134,10 +73,9 @@ def ensure_remote():
     if os.path.isdir(REMOTE_ROOT):
         return True
 
-    password = load_password()
+    password = REMOTE_PASSWORD
     if not password:
-        log.error("連不到 %s，而且還沒存密碼。先執行：python sync_pdfs_to_170.py --save-password",
-                  REMOTE_ROOT)
+        log.error("連不到 %s，而且 REMOTE_PASSWORD 還沒填（在程式最上面的設定區）", REMOTE_ROOT)
         return False
 
     log.info("登入 %s（%s）", REMOTE_SHARE, REMOTE_USER)
@@ -152,7 +90,7 @@ def ensure_remote():
             log.error("net use 失敗：這台電腦已經用「另一組帳號」連著 10.10.28.170。"
                       "先執行 net use \\\\10.10.28.170\\d$ /delete 再重跑。（%s）", msg)
         else:
-            log.error("net use 失敗（密碼錯？帳號格式要是 IP\\帳號？）：%s", msg)
+            log.error("net use 失敗（REMOTE_PASSWORD 錯？REMOTE_USER 格式要是 IP\\帳號？）：%s", msg)
         return False
 
     if not os.path.isdir(REMOTE_ROOT):
@@ -216,12 +154,8 @@ def sync(dry_run=False):
 
 def main():
     parser = argparse.ArgumentParser(description="把 U: 的公文 PDF 複製到 10.10.28.170")
-    parser.add_argument("--save-password", action="store_true", help="輸入並加密儲存 .170 的密碼")
     parser.add_argument("--dry-run", action="store_true", help="只列出會複製哪些檔案")
     args = parser.parse_args()
-
-    if args.save_password:
-        return save_password()
 
     setup_logging()
     log.info("=" * 50)

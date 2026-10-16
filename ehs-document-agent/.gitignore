@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 knowledge/
+sync_pdfs_password.bin
+sync_pdfs.log

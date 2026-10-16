@@ -228,7 +228,12 @@ STEP 4  寫 officialdoc.json → 網頁更新
 
 ### 第一次設定（在 10.10.28.170 上）
 
-1. **PDF 來源**：.170 沒有 U:，要用完整路徑。
+1. **PDF 來源**（兩種擇一）：
+   * **A. 你的電腦推過去（.170 讀不到 U: 時用這個）**：在你的電腦放 `sync_pdfs_to_170.py`，
+     先執行 `python sync_pdfs_to_170.py --save-password` 存 .170 的密碼（DPAPI 加密，只有你的帳號在你的電腦上解得開），
+     再 `python sync_pdfs_to_170.py --dry-run` → `python sync_pdfs_to_170.py`。
+     你的電腦工作排程設「只在使用者登入時執行」，時間比 .170 的 pipeline 早；`PDF_SYNC_SOURCE_ROOT` 保持空的。
+   * **B. .170 自己去 U: 拉**：.170 要先能存取 U: 那台伺服器，步驟如下。
    * 在你的電腦 cmd 打 `net use`，找 U: 那一行，例如 `\\fs01\dept`。
    * 在 .170 存那台伺服器的帳密（用之後跑排程的帳號登入 .170 做一次）：
      `cmdkey /add:fs01 /user:fs01\administrator /pass`

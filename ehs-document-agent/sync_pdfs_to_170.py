@@ -27,18 +27,19 @@ import sys
 # 設定區
 # ═══════════════════════════════════════════════════════════
 
-# 來源：你電腦上的 U:
-SOURCE_ROOT = r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄"
-
-# 目的地：10.10.28.170 上 pipeline 讀的資料夾
-REMOTE_SHARE = r"\\10.10.28.170\d$"                       # net use 連的對象
-REMOTE_ROOT = r"\\10.10.28.170\d$\Web Service\official_doc\pdf"
-
-# (來源子資料夾, 目的子資料夾)
+# ★ 哪個資料夾複製到哪裡：(U: 上的來源, .170 上的目的地)，一組一行 ★
+#   .170 的目的地就是 officialdoc_pipeline.py 裡 PDF_FOLDERS 讀的那兩個資料夾
 SYNC_PAIRS = [
-    ("新增資料夾", "scan"),
-    (os.path.join("公文下載-自動化", "解壓縮"), "download"),
+    (r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄\新增資料夾",
+     r"\\10.10.28.170\d$\Web Service\official_doc\pdf\scan"),
+
+    (r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄\公文下載-自動化\解壓縮",
+     r"\\10.10.28.170\d$\Web Service\official_doc\pdf\download"),
 ]
+
+# 登入 .170 用：net use 連的對象，以及用來確認「連得到」的資料夾
+REMOTE_SHARE = r"\\10.10.28.170\d$"
+REMOTE_ROOT = r"\\10.10.28.170\d$\Web Service\official_doc\pdf"
 
 # ★ .170 的帳號密碼 ★  本機帳號要寫成「IP\帳號」，例如 10.10.28.170\administrator
 #   ⚠ 填了密碼之後，這個檔案不要 commit / push 到 git
@@ -107,18 +108,13 @@ def needs_copy(src, dst):
 
 
 def sync(dry_run=False):
-    if not os.path.isdir(SOURCE_ROOT):
-        log.error("讀不到來源 %s（U: 沒掛上？排程要選「只在使用者登入時執行」）", SOURCE_ROOT)
-        return 1
     if not ensure_remote():
         return 1
 
     total_copied, total_failed = 0, 0
-    for src_rel, dst_rel in SYNC_PAIRS:
-        src_dir = os.path.join(SOURCE_ROOT, src_rel)
-        dst_dir = os.path.join(REMOTE_ROOT, dst_rel)
+    for src_dir, dst_dir in SYNC_PAIRS:
         if not os.path.isdir(src_dir):
-            log.error("來源資料夾不存在：%s", src_dir)
+            log.error("讀不到來源 %s（U: 沒掛上？路徑打錯？排程要選「只在使用者登入時執行」）", src_dir)
             total_failed += 1
             continue
         if not dry_run:

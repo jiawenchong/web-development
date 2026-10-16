@@ -184,7 +184,7 @@ API-key 版本上傳端點。
 
 ## Comment 回饋機制（讓 LLM 從使用者評分學習）
 
-整套都跑在 **10.10.28.170**，全部用本機路徑，不經過你的電腦、不需要網路磁碟。
+程式與產出都在 **10.10.28.170**，不經過你的電腦。唯一從別處讀的是公文 PDF（還是原本 U: 共用資料夾）。
 大家打開 **http://10.10.28.170:8765/** 看公文、評分。
 
 ### 10.10.28.170 資料夾結構
@@ -202,9 +202,6 @@ D:\officialdoc_agent\                    ← 要先建立
 ├─ pensieve_token.txt                   （選用）Flow Token
 ├─ 環安衛收發文管理查詢報表_(Security B).xls   ← download_report.py 下載到這裡
 ├─ pipeline.log / .review_cache.json / 未簽核的公文全文.json   （自動產生）
-├─ pdf\
-│   ├─ scan\                            ← 要先建立：掃描的公文 PDF
-│   └─ download\                        ← 要先建立：自動下載解壓縮的公文 PDF
 ├─ web\
 │   ├─ officialdoc.html                 網頁（從 repo 複製）
 │   └─ data\                            ← 要先建立
@@ -215,6 +212,9 @@ D:\officialdoc_agent\                    ← 要先建立
     ├─ officialdoc_feedback_cases.txt   上傳到知識庫的案例卡
     └─ feedback_server.log
 ```
+
+公文 PDF 不在這裡，pipeline 直接讀原本 U: 共用資料夾的「新增資料夾」與「公文下載-自動化\解壓縮」
+（`officialdoc_pipeline.py` 的 `PDF_ROOT`）。
 
 網頁服務只提供 `web\officialdoc.html` 與 `web\data\officialdoc.json`，資料夾裡其他檔案（程式、token、vector_id、回饋）
 用瀏覽器都拿不到。
@@ -239,10 +239,12 @@ feedback_server.py ──寫入──> feedback\feedback.jsonl
 
 ### 第一次設定（在 10.10.28.170 上）
 
-1. 建資料夾：`D:\officialdoc_agent`、`D:\officialdoc_agent\pdf\scan`、`D:\officialdoc_agent\pdf\download`、`D:\officialdoc_agent\web\data`。
+1. 建資料夾：`D:\officialdoc_agent`、`D:\officialdoc_agent\web\data`。
 2. 裝套件：`pip install pandas pdfplumber requests xlrd lxml`；裝 Chrome 與對應版本的 driver（`download_report.py` 用）。
 3. 把程式、`officialdoc.html`、`vector_id.txt`、`download_report.py` 照上面的結構放好。
 4. 改 `download_report.py`：報表下載資料夾改成 `D:\officialdoc_agent`。
+   確認 .170 讀得到 U: 的公文 PDF：在 .170 的 cmd 打 `net use` 看 U: 對應的路徑，
+   把 `officialdoc_pipeline.py` 的 `PDF_ROOT` 改成那個 `\\伺服器\分享\...` 開頭的路徑（排程下才讀得到）。
 5. 開防火牆 8765 port（系統管理員 cmd）：
    `netsh advfirewall firewall add rule name="officialdoc web" dir=in action=allow protocol=TCP localport=8765`
 6. 手動測試（在 `D:\officialdoc_agent` 執行）：

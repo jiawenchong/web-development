@@ -66,12 +66,14 @@ DOWNLOAD_TIMEOUT = 600                                            # 秒
 REPORT_XLS = os.path.join(WORK_DIR, "環安衛收發文管理查詢報表_(Security B).xls")
 TARGET_STATUS = "FAC廠處長簽核"
 
-# 公文 PDF 放這兩個資料夾（對應原本 U: 底下的「新增資料夾」與「公文下載-自動化\解壓縮」）。
-# ★ 如果 PDF 還是由別人 / 別的程式放在 U: 那個共用資料夾，這裡要改成那個共用資料夾的
-#   UNC 路徑（\\伺服器\分享\...），不要用 U:，排程帳號下沒有 U:。
+# 公文 PDF 的來源不變，還是讀原本 U: 共用資料夾裡的那兩個資料夾。
+# ★ 建議把 PDF_ROOT 換成 U: 對應的 UNC 路徑（\\伺服器\分享\...）★
+#   磁碟機代號是「每個登入 session 各自掛載」的：排程選「不論使用者是否登入都執行」時
+#   沒有 U:，PDF 會全部掃不到。查法：在 .170 的 cmd 打 net use，看 U: 那一行後面的路徑。
+PDF_ROOT = r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄"
 PDF_FOLDERS = [
-    os.path.join(BASE_DIR, "pdf", "scan"),
-    os.path.join(BASE_DIR, "pdf", "download"),
+    os.path.join(PDF_ROOT, "新增資料夾"),
+    os.path.join(PDF_ROOT, "公文下載-自動化", "解壓縮"),
 ]
 
 FULLTEXT_JSON = os.path.join(WORK_DIR, "未簽核的公文全文.json")   # 中繼檔（除錯用）

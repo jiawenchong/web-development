@@ -229,11 +229,13 @@ STEP 4  寫 officialdoc.json → 網頁更新
 
 ### 第一次設定（在 10.10.28.170 上）
 
-1. **PDF 來源**：.170 讀不到 U:，由**你的電腦**把 PDF 推過去。
-   在你的電腦放 `sync_pdfs_to_170.py`，在程式最上面填 `REMOTE_USER` / `REMOTE_PASSWORD`（填了密碼的檔案不要 commit），
-   再 `python sync_pdfs_to_170.py --dry-run` → `python sync_pdfs_to_170.py`。
+1. **報表與 PDF 由你的電腦送過去**：.170 讀不到 U:，也沒辦法自動登入環安衛網站。
+   在你的電腦放 `sync_pdfs_to_170.py`，設定區填 `REMOTE_USER` / `REMOTE_PASSWORD`（填了密碼的檔案不要 commit），
+   確認 `DOWNLOAD_SCRIPT` / `REPORT_SRC` 是你電腦上 `download_report.py` 與它下載報表的位置。
+   它會：執行 `download_report.py` → 報表複製到 .170 → U: 的 PDF 複製到 .170 的 `pdf\scan`、`pdf\download`。
+   先 `python sync_pdfs_to_170.py --dry-run`，再 `python sync_pdfs_to_170.py`。
    你的電腦工作排程設「只在使用者登入時執行」，時間比 .170 的 pipeline 早。
-2. **download_report.py**：確認下載資料夾是 `D:\Web Service\official_doc`。
+   .170 的 pipeline 已設 `RUN_DOWNLOAD = False`，不會自己下載。
 3. **套件**：`pip install pandas pdfplumber requests xlrd lxml`；Chrome 與對應版本的 driver。
 4. **防火牆** 8765 port（系統管理員 cmd）：
    `netsh advfirewall firewall add rule name="officialdoc web" dir=in action=allow protocol=TCP localport=8765`

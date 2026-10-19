@@ -57,7 +57,9 @@ BASE_DIR = r"D:\Web Service\official_doc"
 WORK_DIR = BASE_DIR              # 程式、token、log、快取、下載的報表都放這裡
 
 # ── STEP 1：下載腳本 ───────────────────────────────
-RUN_DOWNLOAD = True
+# False = 不在這台下載。報表由你的電腦跑 sync_pdfs_to_170.py 下載後複製過來
+#         （.170 沒辦法自動登入環安衛網站）。想在這台下載再改回 True。
+RUN_DOWNLOAD = False
 DOWNLOAD_SCRIPT = os.path.join(WORK_DIR, "download_report.py")   # ← 確認你的檔名
 DOWNLOAD_TIMEOUT = 600                                            # 秒
 
@@ -288,6 +290,12 @@ def step1_download():
 def read_report(path):
     """讀報表。ASP.NET 匯出的 .xls 常常其實是 HTML 表格，所以要有 fallback。"""
     wait_until_stable(path, timeout=30)
+
+    age_h = (time.time() - os.path.getmtime(path)) / 3600
+    log.info("報表檔時間 %s（%.1f 小時前）",
+             datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M"), age_h)
+    if age_h > 24:
+        log.warning("報表超過 24 小時沒更新——你電腦的 sync_pdfs_to_170.py 今天有跑嗎？")
 
     try:
         df = pd.read_excel(path)

@@ -2,8 +2,11 @@
 """
 建廠影響公文掃描 — 找出「外部單位的事情」會讓建廠暫停、延後或需要配合的公文
 
-  STEP 1  掃 input\\pdf（目前的公文）與 input\\history（歷史公文），從檔名取日期/字號/發文單位
-  STEP 2  依檔名日期篩選 → 關鍵字粗篩（掃描檔讀不到字的一律送，寧可多送不要漏）
+  STEP 1  列出 input\\pdf（目前）與 input\\history（歷史）的檔名——只看檔名，不開檔案
+          從檔名取日期/字號/發文單位，用字號到環安衛報表查主旨
+  STEP 2  依檔名日期篩選 → 關鍵字粗篩：
+            報表查得到主旨 → 只看檔名 + 主旨決定，不開檔案（掃描檔也不用盲送）
+            報表查不到     → 才打開 PDF 看文字層；讀不到字的掃描檔一律送
   STEP 3  每篇轉成 PNG → 上傳 /files 拿 file_id → /chat/completions 判斷
   STEP 4  輸出三個 JSON：
             output\\construction_impact.json  還沒過去的影響，停工排最前面
@@ -11,7 +14,8 @@
             output\\not_related.json          粗篩排除 / LLM 判定與建廠無關（檢查有沒有漏）
 
 在你自己的電腦上跑，所有檔案都在 BASE_DIR 底下，資料夾第一次執行時自動建立。
-報表（input\\report）是選用的：有放就拿主旨跟 LLM 讀到的對照，沒放也照跑。
+報表（input\\report）強烈建議放「全年、不限簽核狀態」的匯出檔：有主旨就不必打開每個 PDF，
+歷史資料夾幾千個檔案也只會打開真正要送 LLM 的那幾篇。沒放也照跑，只是每個檔案都要打開檢查。
 
 執行：
     python construction_impact_scan.py                    # 正式跑
@@ -68,15 +72,19 @@ CACHE_DIR = os.path.join(BASE_DIR, "cache")
 #   r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄\新增資料夾",
 PDF_FOLDERS = [
     os.path.join(INPUT_DIR, "pdf"),
+    r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄\新增資料夾",
+    r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄\公文下載-自動化\解壓縮",
 ]
 
 # 歷史公文：已經過去的案例，一樣整理成固定格式，放進 history_cases.json 給 RAG 用。
 # 不做日期篩選。
 HISTORY_FOLDERS = [
     os.path.join(INPUT_DIR, "history"),
+    r"U:\0.廠務環工公用資料夾\23.UTI-各項資料回覆\● 公文掃瞄\2026",
 ]
 
-# 選用：環安衛報表（.xls / .xlsx / .html）。有放就用「來文字號」對回主旨，沒放就略過。
+# 環安衛報表（.xls / .xlsx / .html），用「來文字號」對回主旨。資料夾裡有多個檔案時用最新的那個。
+# ★ 請放「查詢範圍涵蓋全年、不限簽核狀態」的匯出檔，歷史公文才查得到主旨 ★
 REPORT_DIR = os.path.join(INPUT_DIR, "report")
 
 FILE_EXTS = (".pdf", ".png", ".jpg", ".jpeg")
@@ -140,6 +148,8 @@ HISTORY_JSON = os.path.join(OUTPUT_DIR, "history_cases.json")
 NOT_RELATED_JSON = os.path.join(OUTPUT_DIR, "not_related.json")
 
 CACHE_FILE = os.path.join(CACHE_DIR, "construction_cache.json")
+# 報表查不到主旨、必須打開來看的檔案，看過一次就記下結果（頁數、字數、關鍵字），之後不用再開
+SCAN_CACHE_FILE = os.path.join(CACHE_DIR, "scan_cache.json")
 LOG_FILE = os.path.join(CACHE_DIR, "construction_scan.log")
 
 
@@ -225,12 +235,10 @@ def num_key(s):
     return d.lstrip("0") or "0"
 
 
-def file_sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def file_fingerprint(path):
+    """檔名 + 大小 + 修改時間，當快取鍵用。只讀檔案資訊、不開檔案（網路磁碟上幾千個檔也很快）。"""
+    st = os.stat(path)
+    return f"{os.path.basename(path)}|{st.st_size}|{int(st.st_mtime)}"
 
 
 def to_iso_date(value):
@@ -295,7 +303,7 @@ def read_pdf_info(path):
 
 
 def scan_folders(folders, source):
-    """掃資料夾（含子資料夾），回傳每個檔案的基本資訊。"""
+    """列出資料夾（含子資料夾）裡的檔案。只看檔名、不開檔案；要讀內容時再呼叫 ensure_loaded()。"""
     docs = []
     for folder in folders:
         if not os.path.isdir(folder):
@@ -309,13 +317,12 @@ def scan_folders(folders, source):
                     continue
                 path = os.path.join(root, name)
                 try:
-                    pages, text = read_pdf_info(path)
-                    sha = file_sha256(path)
-                except Exception as e:
-                    log.warning("檔案讀取失敗 %s：%s: %s", name, type(e).__name__, e)
+                    fp = file_fingerprint(path)
+                except OSError as e:
+                    log.warning("檔案資訊讀取失敗 %s：%s: %s", name, type(e).__name__, e)
                     continue
-                docs.append({"檔名": name, "檔案路徑": path, "來源": source,
-                             "頁數": pages, "文字層": text, "sha": sha, **parse_filename(name)})
+                docs.append({"檔名": name, "檔案路徑": path, "來源": source, "指紋": fp,
+                             **parse_filename(name)})
                 found += 1
         log.info("%s → %d 個檔案（%s）", folder, found, source)
 
@@ -375,16 +382,72 @@ def load_report_subjects():
 # STEP 2  日期篩選 + 關鍵字粗篩
 # ═══════════════════════════════════════════════════════════
 
-def prefilter(doc):
-    """回傳 (要不要送 LLM, 原因)。"""
-    hay = norm(doc["檔名"] + doc.get("報表主旨", "") + doc["文字層"])
+def ensure_loaded(doc):
+    """真的要用到內容時才打開檔案，讀頁數與文字層。"""
+    if "文字層" not in doc:
+        try:
+            doc["頁數"], doc["文字層"] = read_pdf_info(doc["檔案路徑"])
+        except Exception as e:          # PyMuPDF 的錯誤型別不一定，統一轉成 ValueError
+            raise ValueError(f"檔案打不開：{type(e).__name__}: {e}") from e
+    return doc
+
+
+_scan_cache = None
+
+
+def load_scan_cache():
+    global _scan_cache
+    if _scan_cache is None:
+        try:
+            with open(SCAN_CACHE_FILE, "r", encoding="utf-8") as f:
+                _scan_cache = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            _scan_cache = {}
+    return _scan_cache
+
+
+def save_scan_cache():
+    if _scan_cache is not None:
+        atomic_write_json(SCAN_CACHE_FILE, _scan_cache)
+
+
+def keyword_hits(text):
+    hay = norm(text)
     hits = [k for k in KEYWORDS if norm(k) in hay]
     hits += sorted({m.upper() for m in PLANT_PATTERN.findall(hay)})
+    return hits
+
+
+def prefilter(doc):
+    """回傳 (要不要送 LLM, 原因)。
+
+    報表查得到主旨 → 只看檔名 + 主旨，不開檔案。
+    報表查不到     → 打開檔案看文字層；讀不到字的掃描檔一律送，寧可多送不要漏。
+    """
+    hits = keyword_hits(doc["檔名"] + doc.get("報表主旨", ""))
     if hits:
         return True, "關鍵字：" + "、".join(hits[:6])
-    if len(doc["文字層"]) < MIN_TEXT_CHARS:
-        return True, "掃描檔，本機讀不到文字"
-    return False, "有文字層但沒有任何關鍵字"
+    if doc.get("報表主旨"):
+        return False, "報表主旨沒有任何關鍵字"
+
+    scan_cache = load_scan_cache()
+    info = scan_cache.get(doc["指紋"])
+    if info is None:
+        try:
+            ensure_loaded(doc)
+        except ValueError as e:
+            log.warning("%s：%s", doc["檔名"], e)
+            return False, str(e)              # 不記錄，下次再試
+        info = {"頁數": doc["頁數"], "字數": len(doc["文字層"]),
+                "關鍵字": keyword_hits(doc["文字層"])}
+        scan_cache[doc["指紋"]] = info
+
+    hits = info["關鍵字"]
+    if hits:
+        return True, "關鍵字（內文）：" + "、".join(hits[:6])
+    if info["字數"] < MIN_TEXT_CHARS:
+        return True, "掃描檔，報表裡也查不到這個字號"
+    return False, "報表查不到，內文也沒有任何關鍵字"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -627,7 +690,10 @@ def finalize(doc, review, reason):
     if review.pop("_失敗", None) is not None:
         notes.append(f"自動判斷失敗：{doc.get('_錯誤', '')}")
 
-    evidence = check_evidence(review["原文依據"], doc["文字層"])
+    # 判斷當下已經算好並存進快取，快取命中時就不用再打開檔案
+    evidence = review.pop("_依據檢查", None) or check_evidence(review["原文依據"],
+                                                              doc.get("文字層", ""))
+    pages = review.pop("_頁數", None) or doc.get("頁數", 0)
     if evidence == "原文找不到":
         review["信心度"] = "低"
         notes.append("原文依據在 PDF 文字層裡找不到，可能是 LLM 改寫或編造")
@@ -644,8 +710,8 @@ def finalize(doc, review, reason):
     if key and review["來文字號"] and key not in digits(review["來文字號"]):
         notes.append(f"LLM 讀到的字號跟檔名不同（檔名：{doc['檔名字號']}）")
 
-    if doc["頁數"] > MAX_PAGES:
-        notes.append(f"共 {doc['頁數']} 頁，只送前 {MAX_PAGES} 頁")
+    if pages > MAX_PAGES:
+        notes.append(f"共 {pages} 頁，只送前 {MAX_PAGES} 頁")
 
     need_check = (review["影響程度"] == "待確認" or review["信心度"] == "低"
                   or evidence == "原文找不到"
@@ -677,12 +743,13 @@ def load_cache():
 
 
 def cache_key(doc):
-    raw = f"v{PROMPT_VERSION}|{doc['sha']}|{doc.get('報表主旨', '')}"
+    raw = f"v{PROMPT_VERSION}|{doc['指紋']}|{doc.get('報表主旨', '')}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def judge_one(api_key, template, doc):
     """一篇：轉圖 → 上傳 → 判斷。暫存圖片用完就刪。"""
+    ensure_loaded(doc)
     work = tempfile.mkdtemp(prefix="pages_", dir=CACHE_DIR)
     try:
         images = render_pages(doc["檔案路徑"], work)
@@ -723,6 +790,8 @@ def step3_judge(candidates, cached_only, use_cache=True):
 
         try:
             _, review = judge_one(api_key, template, doc)
+            review["_依據檢查"] = check_evidence(review["原文依據"], doc["文字層"])
+            review["_頁數"] = doc["頁數"]
             cache[key] = review
             atomic_write_json(CACHE_FILE, cache)    # 每篇都存，中途斷掉不會白跑
             log.info("[%d/%d] %s → %s / %s / %s", i, len(candidates), doc["檔名"],
@@ -798,6 +867,7 @@ def step4_write(pairs, excluded, today):
 def probe(doc):
     """送一篇並把送出去的文字、收回來的原始回應、整理後的結果都印出來。"""
     api_key, template = get_api_key(), load_prompt()
+    ensure_loaded(doc)
     prompt = build_prompt(template, doc)
     print("─" * 60)
     print(f"檔案：{doc['檔案路徑']}（{doc['頁數']} 頁，送前 {min(doc['頁數'], MAX_PAGES)} 頁）")
@@ -819,10 +889,11 @@ def print_dry_run(candidates, excluded, out_of_range):
     print("─" * 60)
     print(f"會送 LLM：{len(candidates)} 篇")
     for doc, reason in candidates:
-        print(f"  [{doc['來源']}] {doc['檔名']}（{doc['頁數']} 頁）— {reason}")
-    print(f"粗篩排除：{len(excluded)} 篇")
+        subject = f"｜{doc['報表主旨']}" if doc.get("報表主旨") else ""
+        print(f"  [{doc['來源']}] {doc['檔名']}{subject} — {reason}")
+    print(f"粗篩排除：{len(excluded)} 篇（明細在 log 檔，正式跑後在 not_related.json）")
     for doc, reason in excluded:
-        print(f"  [{doc['來源']}] {doc['檔名']} — {reason}")
+        log.info("  排除 [%s] %s｜%s — %s", doc["來源"], doc["檔名"], doc.get("報表主旨", ""), reason)
     print(f"日期範圍外（只沿用快取，不送）：{len(out_of_range)} 篇")
     print("─" * 60)
 
@@ -850,20 +921,31 @@ def main():
     try:
         if args.probe_file:
             path = os.path.abspath(args.probe_file)
-            pages, text = read_pdf_info(path)
             name = os.path.basename(path)
-            return probe({"檔名": name, "檔案路徑": path, "來源": "目前", "頁數": pages,
-                          "文字層": text, "sha": file_sha256(path), **parse_filename(name)})
+            return probe({"檔名": name, "檔案路徑": path, "來源": "目前",
+                          "指紋": file_fingerprint(path), **parse_filename(name)})
 
         # STEP 1
         subjects = load_report_subjects()
         docs = scan_folders(PDF_FOLDERS, "目前")
         if not args.skip_history:
             docs += scan_folders(HISTORY_FOLDERS, "歷史")
+
+        # 同一個檔案同時在「目前」和「歷史」資料夾時只留一份（先掃的「目前」優先）
+        unique = {}
+        for doc in docs:
+            unique.setdefault(norm(doc["檔名"]), doc)
+        if len(unique) < len(docs):
+            log.info("重複的檔案 %d 個（同時在目前與歷史資料夾），只算一次", len(docs) - len(unique))
+        docs = list(unique.values())
+
         for doc in docs:
             subject = subjects.get(num_key(doc["檔名字號"]))
             if subject:
                 doc["報表主旨"] = subject
+        if subjects:
+            matched = sum(1 for d in docs if d.get("報表主旨"))
+            log.info("報表對到主旨 %d / %d 篇（對不到的才需要打開檔案檢查）", matched, len(docs))
 
         # STEP 2
         if args.since:
@@ -883,6 +965,7 @@ def main():
         for doc in in_range:
             send, reason = (True, "--all") if args.all else prefilter(doc)
             (candidates if send else excluded).append((doc, reason))
+        save_scan_cache()
         log.info("STEP 2 粗篩：送 LLM %d 篇、排除 %d 篇", len(candidates), len(excluded))
 
         if args.dry_run:

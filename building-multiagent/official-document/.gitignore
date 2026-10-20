@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+input/
+output/
+cache/
+api_key.txt

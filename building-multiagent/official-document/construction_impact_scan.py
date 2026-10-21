@@ -87,6 +87,13 @@ HISTORY_FOLDERS = [
 # ★ 請放「查詢範圍涵蓋全年、不限簽核狀態」的匯出檔，歷史公文才查得到主旨 ★
 REPORT_DIR = os.path.join(INPUT_DIR, "report")
 
+# ★ 廠棟對照表：O 欄每格是「廠棟|地址|別稱|其他|電號|坐標」，用 | 分隔 ★
+#   第一段是廠棟代號，後面每一段（地址、別稱、電號…）都當成這個廠棟的識別字。
+#   好幾個廠棟共用的值（例如公司名稱）分辨不出廠棟，會自動略過。
+#   用途：送 LLM 時附上對照表；LLM 回來的「影響廠棟」再用表換成廠棟代號（輸出在「廠棟代號」欄）。
+PLANT_TABLE_FILE = os.path.join(REPORT_DIR, "RPA廠棟_(Security C).xlsx")
+PLANT_TABLE_COLUMN = "O"
+
 FILE_EXTS = (".pdf", ".png", ".jpg", ".jpeg")
 
 # ── STEP 2：篩選 ───────────────────────────────────
@@ -350,23 +357,30 @@ def load_report_subjects():
     files = []
     if os.path.isdir(REPORT_DIR):
         files = [os.path.join(REPORT_DIR, n) for n in os.listdir(REPORT_DIR)
-                 if n.lower().endswith((".xls", ".xlsx", ".htm", ".html"))]
+                 if n.lower().endswith((".xls", ".xlsx", ".htm", ".html"))
+                 and not n.startswith("~$")                       # Excel 開著時的暫存檔
+                 and os.path.abspath(os.path.join(REPORT_DIR, n)) != os.path.abspath(PLANT_TABLE_FILE)]
     if not files:
         log.info("input\\report 沒有報表，主旨直接由 LLM 從公文讀")
         return {}
 
-    path = max(files, key=os.path.getmtime)
-    try:
-        df = read_report(path)
-    except ImportError as e:
-        log.warning("有報表但缺套件（pip install pandas xlrd lxml），這次不用報表：%s", e)
-        return {}
-    except Exception as e:
-        log.warning("報表讀取失敗，這次不用報表：%s：%s: %s", path, type(e).__name__, e)
-        return {}
-
-    if "來文字號" not in df.columns or "主旨" not in df.columns:
-        log.warning("報表缺少「來文字號」或「主旨」欄位，這次不用報表。實際欄位：%s", list(df.columns))
+    # 從最新的檔案開始找，第一個有「來文字號」「主旨」欄位的才當報表（其他 Excel 放同資料夾也不會誤讀）
+    df = path = None
+    for candidate in sorted(files, key=os.path.getmtime, reverse=True):
+        try:
+            frame = read_report(candidate)
+        except ImportError as e:
+            log.warning("有報表但缺套件（pip install pandas xlrd lxml），這次不用報表：%s", e)
+            return {}
+        except Exception as e:
+            log.warning("報表讀取失敗，略過：%s：%s: %s", candidate, type(e).__name__, e)
+            continue
+        if "來文字號" in frame.columns and "主旨" in frame.columns:
+            df, path = frame, candidate
+            break
+        log.info("%s 沒有「來文字號」「主旨」欄位，不是收發文報表，略過", os.path.basename(candidate))
+    if df is None:
+        log.warning("input\\report 裡找不到有「來文字號」「主旨」欄位的報表，這次不用報表")
         return {}
 
     subjects = {}
@@ -376,6 +390,132 @@ def load_report_subjects():
             subjects[key] = str(row["主旨"]).strip()
     log.info("報表 %s → %d 筆主旨", os.path.basename(path), len(subjects))
     return subjects
+
+
+def pnorm(s):
+    """比對廠棟用：norm 之外再把「臺」統一成「台」。"""
+    return norm(s).replace("臺", "台")
+
+
+def identifier_variants(ident):
+    """一個識別字的比對形式。地址另外產生「去掉縣市」「再去掉區」的版本，公文常只寫後半段。"""
+    v = pnorm(ident)
+    variants = {v}
+    if re.search(r"[路街段號巷弄區里]", v):
+        no_city = re.sub(r"^[^市縣]{1,3}[市縣]", "", v)
+        no_dist = re.sub(r"^[^區鄉鎮]{1,3}[區鄉鎮]", "", no_city)
+        variants |= {x for x in (no_city, no_dist) if len(x) >= 6}
+    return {x for x in variants if len(x) >= 4}
+
+
+def load_plant_table():
+    """讀廠棟對照表 → 比對用的索引。讀不到就回傳 None，不影響主流程。"""
+    if not os.path.exists(PLANT_TABLE_FILE):
+        log.info("沒有廠棟對照表（%s），影響廠棟只看 LLM 的判斷", PLANT_TABLE_FILE)
+        return None
+    try:
+        import pandas as pd
+        df = pd.read_excel(PLANT_TABLE_FILE, header=None, dtype=str)
+    except Exception as e:
+        log.warning("廠棟對照表讀取失敗，這次不用：%s: %s", type(e).__name__, e)
+        return None
+
+    col = ord(PLANT_TABLE_COLUMN.strip().upper()) - ord("A")
+    if col >= df.shape[1]:
+        log.warning("廠棟對照表沒有 %s 欄，這次不用", PLANT_TABLE_COLUMN)
+        return None
+
+    table = {}
+    for cell in df.iloc[:, col].dropna():
+        parts = [p.strip() for p in str(cell).split("|")]
+        if not parts[0] or parts[0] == "廠棟":
+            continue
+        idents = table.setdefault(parts[0], [])
+        idents += [p for p in parts[1:] if p and p not in idents]
+    if not table:
+        log.warning("廠棟對照表 %s 欄沒有讀到任何廠棟，這次不用", PLANT_TABLE_COLUMN)
+        return None
+
+    owners = {}
+    for code, idents in table.items():
+        for ident in idents:
+            for v in identifier_variants(ident):
+                owners.setdefault(v, set()).add(code)
+    ids = {v: next(iter(codes)) for v, codes in owners.items() if len(codes) == 1}
+
+    # 給 LLM 看的對照表：只列分辨得出廠棟的原始值
+    lines = []
+    for code, idents in table.items():
+        unique = [i for i in idents if len(owners.get(pnorm(i), ())) == 1]
+        lines.append(f"{code}：" + "｜".join(unique) if unique else code)
+
+    codes = {pnorm(c): c for c in table}
+    code_re = re.compile(r"(?<![a-z0-9])(" + "|".join(
+        re.escape(c) for c in sorted(codes, key=len, reverse=True)) + r")(?![a-z0-9])")
+    skipped = sum(1 for v, c in owners.items() if len(c) > 1)
+    log.info("廠棟對照表 → %d 個廠棟、%d 個識別字（%d 個多廠共用，略過）",
+             len(table), len(ids), skipped)
+    return {"codes": codes, "ids": ids, "code_re": code_re, "prompt": "\n".join(lines)}
+
+
+_plants = None
+
+
+def get_plants():
+    global _plants
+    if _plants is None:
+        _plants = load_plant_table() or {}
+    return _plants
+
+
+def find_plants(text):
+    """文字裡出現的廠棟 → (廠棟代號清單, [(比對到的識別字, 廠棟), ...])。"""
+    plants = get_plants()
+    if not plants or not text:
+        return [], []
+    t = pnorm(text)
+    found, hits = [], []
+    for m in plants["code_re"].finditer(t):
+        code = plants["codes"][m.group(1)]
+        if code not in found:
+            found.append(code)
+    for ident, code in plants["ids"].items():
+        if ident in t:
+            hits.append((ident, code))
+            if code not in found:
+                found.append(code)
+    return found, hits
+
+
+def resolve_plants(review, doc, notes):
+    """LLM 的「影響廠棟」→ 廠棟表上的代號；LLM 沒寫就從主旨 / 原文依據 / 內文比對。"""
+    if not get_plants():
+        return ""
+    field = review["影響廠棟"]
+    codes, hits = find_plants(field)
+    for ident, code in hits:
+        if pnorm(field) != pnorm(code):
+            notes.append(f"影響廠棟「{field}」依廠棟表對應為 {code}")
+            break
+
+    unknown = [m.upper() for m in PLANT_PATTERN.findall(pnorm(field))
+               if pnorm(m) not in get_plants()["codes"]
+               and not any(pnorm(c).startswith(pnorm(m)) for c in codes)]
+    if unknown:
+        notes.append(f"影響廠棟「{'、'.join(unknown)}」不在廠棟表裡")
+
+    if not codes:
+        text = " ".join([review["主旨"], review["原文依據"], review["需要配合事項"],
+                         doc.get("報表主旨", "")])
+        codes, hits = find_plants(text)
+        for code in review.get("_內文廠棟", []):
+            if code not in codes:
+                codes.append(code)
+        if codes:
+            via = "、".join(f"{i}→{c}" for i, c in hits[:3])
+            notes.append(f"影響廠棟由公文內容比對廠棟表推得：{'、'.join(codes)}"
+                         + (f"（{via}）" if via else ""))
+    return "、".join(codes)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -591,7 +731,12 @@ def build_prompt(template, doc):
     if doc.get("報表主旨"):
         info["報表主旨"] = doc["報表主旨"]
 
-    text = f"{template}\n\n【檔案資訊】\n{json.dumps(info, ensure_ascii=False, indent=2)}"
+    text = template
+    if get_plants():
+        text += ("\n\n【廠棟對照表（以此為準）】\n" + get_plants()["prompt"] +
+                 "\n影響廠棟請填上表的廠棟代號，多個用「、」分隔。公文只寫地址、地號、電號或別稱時，"
+                 "照上表換成廠棟代號；對不到就照抄公文寫的內容，不要猜。")
+    text += f"\n\n【檔案資訊】\n{json.dumps(info, ensure_ascii=False, indent=2)}"
     if len(doc["文字層"]) >= MIN_TEXT_CHARS:
         text += ("\n\n【PDF 文字層（電腦抽出的文字，可能有錯字或缺漏，以圖片為準）】\n"
                  + doc["文字層"][:TEXT_LAYER_CHARS])
@@ -703,6 +848,12 @@ def finalize(doc, review, reason):
     if review["影響程度"] in HAS_IMPACT and not review["開始日期"]:
         notes.append("有影響但沒有日期")
 
+    plant_codes = resolve_plants(review, doc, notes)
+    review.pop("_內文廠棟", None)
+    no_plant = bool(get_plants()) and review["影響程度"] in HAS_IMPACT and not plant_codes
+    if no_plant:
+        notes.append("有影響但對應不到廠棟表")
+
     if doc.get("報表主旨") and not same_subject(doc["報表主旨"], review["主旨"]):
         notes.append(f"LLM 讀到的主旨跟報表不同（報表：{doc['報表主旨']}）")
 
@@ -716,6 +867,7 @@ def finalize(doc, review, reason):
     need_check = (review["影響程度"] == "待確認" or review["信心度"] == "低"
                   or evidence == "原文找不到"
                   or (review["影響程度"] in HAS_IMPACT and not review["開始日期"])
+                  or no_plant
                   or any(n.startswith(("自動判斷失敗", "LLM 讀到的主旨")) for n in notes))
 
     return {
@@ -723,6 +875,7 @@ def finalize(doc, review, reason):
         "來源": doc["來源"],
         "檔名日期": doc["檔名日期"].isoformat() if doc["檔名日期"] else "",
         **review,
+        "廠棟代號": plant_codes,
         "依據檢查": evidence,
         "需人工確認": need_check,
         "檢查備註": notes,
@@ -792,6 +945,7 @@ def step3_judge(candidates, cached_only, use_cache=True):
             _, review = judge_one(api_key, template, doc)
             review["_依據檢查"] = check_evidence(review["原文依據"], doc["文字層"])
             review["_頁數"] = doc["頁數"]
+            review["_內文廠棟"] = find_plants(doc["文字層"])[0]
             cache[key] = review
             atomic_write_json(CACHE_FILE, cache)    # 每篇都存，中途斷掉不會白跑
             log.info("[%d/%d] %s → %s / %s / %s", i, len(candidates), doc["檔名"],
@@ -859,7 +1013,7 @@ def step4_write(pairs, excluded, today):
     for r in current:
         if r["影響程度"] in ("全面停工", "部分停工"):
             log.info("  ★ %s %s %s %s（%s）", r["開始日期"] or "日期未定", r["影響程度"],
-                     r["影響廠棟"] or "廠棟未定", r["原因類別"], r["發文機關"])
+                     r["廠棟代號"] or r["影響廠棟"] or "廠棟未定", r["原因類別"], r["發文機關"])
 
 
 # ═══════════════════════════════════════════════════════════

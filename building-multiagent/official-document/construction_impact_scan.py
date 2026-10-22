@@ -33,6 +33,7 @@
 """
 
 import argparse
+import difflib
 import hashlib
 import json
 import logging
@@ -804,6 +805,28 @@ def failed_review(reason):
     return review
 
 
+# 原文比對的規則版本。規則改了就 +1：快取裡「原文找不到」的那幾篇會重新打開檔案再比一次
+EVIDENCE_VERSION = 2
+
+# 抄錄的一段跟原文有多少比例的字相同就算「大致符合」（LLM 常改一兩個字、漏標點、全半形不同）
+EVIDENCE_FUZZY_RATIO = 0.8
+
+
+def _segment_match(seg, hay):
+    """回傳 'exact' / 'fuzzy' / None。fuzzy：在原文裡找最像的那一段，相同的字 ≥ EVIDENCE_FUZZY_RATIO。"""
+    if seg in hay:
+        return "exact"
+    sm = difflib.SequenceMatcher(None, seg, hay, autojunk=False)
+    m = sm.find_longest_match(0, len(seg), 0, len(hay))
+    if m.size == 0:
+        return None
+    start = max(0, m.b - m.a - 5)
+    window = hay[start:start + len(seg) + 10]
+    same = sum(b.size for b in difflib.SequenceMatcher(None, seg, window, autojunk=False)
+               .get_matching_blocks())
+    return "fuzzy" if same / len(seg) >= EVIDENCE_FUZZY_RATIO else None
+
+
 def check_evidence(quote, text_layer):
     """原文依據是不是真的出現在 PDF 文字層裡。"""
     if not quote:
@@ -814,7 +837,12 @@ def check_evidence(quote, text_layer):
     # LLM 抄長句時常用「…」省略中間，分段各自比對
     segments = [norm_words(s) for s in re.split(r"[…⋯]+|\.{3,}", quote)]
     segments = [s for s in segments if len(s) >= 6] or [norm_words(quote)]
-    return "符合原文" if all(s in hay for s in segments) else "原文找不到"
+    results = [_segment_match(s, hay) for s in segments]
+    if all(r == "exact" for r in results):
+        return "符合原文"
+    if all(results):
+        return "大致符合原文"
+    return "原文找不到"
 
 
 def same_subject(a, b):
@@ -839,6 +867,7 @@ def finalize(doc, review, reason):
     evidence = review.pop("_依據檢查", None) or check_evidence(review["原文依據"],
                                                               doc.get("文字層", ""))
     pages = review.pop("_頁數", None) or doc.get("頁數", 0)
+    review.pop("_依據版本", None)
     if evidence == "原文找不到":
         review["信心度"] = "低"
         notes.append("原文依據在 PDF 文字層裡找不到，可能是 LLM 改寫或編造")
@@ -933,17 +962,28 @@ def step3_judge(candidates, cached_only, use_cache=True):
     if candidates and (not use_cache or any(cache_key(d) not in cache for d, _ in candidates)):
         api_key, template = get_api_key(), load_prompt()
 
-    hits, fails = 0, 0
+    hits, fails, rechecked = 0, 0, 0
     for i, (doc, reason) in enumerate(candidates, 1):
         key = cache_key(doc)
         if use_cache and key in cache:
             hits += 1
-            pairs.append((doc, cache[key], reason))
+            cached = cache[key]
+            if (cached.get("_依據檢查") == "原文找不到"
+                    and cached.get("_依據版本") != EVIDENCE_VERSION):
+                try:                                  # 比對規則改了：重新打開檔案再比一次
+                    ensure_loaded(doc)
+                    cached["_依據檢查"] = check_evidence(cached["原文依據"], doc["文字層"])
+                    cached["_依據版本"] = EVIDENCE_VERSION
+                    rechecked += 1
+                except ValueError as e:
+                    log.warning("%s：重新比對原文失敗：%s", doc["檔名"], e)
+            pairs.append((doc, cached, reason))
             continue
 
         try:
             _, review = judge_one(api_key, template, doc)
             review["_依據檢查"] = check_evidence(review["原文依據"], doc["文字層"])
+            review["_依據版本"] = EVIDENCE_VERSION
             review["_頁數"] = doc["頁數"]
             review["_內文廠棟"] = find_plants(doc["文字層"])[0]
             cache[key] = review
@@ -960,6 +1000,9 @@ def step3_judge(candidates, cached_only, use_cache=True):
         pairs.append((doc, review, reason))
         time.sleep(LLM_GAP)
 
+    if rechecked:
+        atomic_write_json(CACHE_FILE, cache)
+        log.info("比對規則更新：%d 篇「原文找不到」重新比對過", rechecked)
     log.info("STEP 3 完成：%d 篇，快取命中 %d、失敗 %d", len(candidates), hits, fails)
     return pairs, fails
 
@@ -983,6 +1026,8 @@ def step4_write(pairs, excluded, today):
                                 "主旨": rec["主旨"], "原因": "LLM 判定與建廠無關",
                                 "檔案路徑": rec["檔案路徑"]})
         elif rec["來源"] == "歷史" or is_past(rec, today):
+            # 歷史案例事情已經過去，不需要人工確認（檢查備註照樣保留，給 RAG 參考）；判斷失敗的除外
+            rec["需人工確認"] = rec["是否建廠相關"] is None
             history.append(rec)
         else:
             current.append(rec)
@@ -1004,12 +1049,15 @@ def step4_write(pairs, excluded, today):
     atomic_write_json(NOT_RELATED_JSON, not_related)
 
     stop = sum(1 for r in current if r["影響程度"] in ("全面停工", "部分停工"))
-    check = sum(1 for r in current + history if r["需人工確認"])
+    check = sum(1 for r in current if r["需人工確認"])
+    failed = sum(1 for r in history if r["是否建廠相關"] is None)
     log.info("STEP 4 完成：")
     log.info("  目前的影響 %d 篇（其中停工 %d 篇）→ %s", len(current), stop, CURRENT_JSON)
     log.info("  歷史案例   %d 篇 → %s", len(history), HISTORY_JSON)
     log.info("  無關/排除  %d 篇 → %s", len(not_related), NOT_RELATED_JSON)
-    log.info("  需人工確認 %d 篇", check)
+    log.info("  需人工確認 %d 篇（只算目前的影響）", check)
+    if failed:
+        log.info("  歷史判斷失敗 %d 篇（下次執行會自動重試）", failed)
     for r in current:
         if r["影響程度"] in ("全面停工", "部分停工"):
             log.info("  ★ %s %s %s %s（%s）", r["開始日期"] or "日期未定", r["影響程度"],
